@@ -18,6 +18,7 @@ use once_cell::sync::OnceCell;
 mod error;
 mod log;
 mod syntax;
+mod theme;
 
 static LOGGER: OnceCell<Logger> = OnceCell::new();
 

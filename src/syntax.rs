@@ -1,204 +1,242 @@
-use std::path::Path;
+use std::str::FromStr;
 
-use plist::{Dictionary, Value};
+use strum_macros::EnumString;
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::error::ThemeParseError;
+use crate::theme::Theme;
 
-#[derive(Debug, Clone, Default)]
-pub struct Theme {
-    pub name: String,
-    pub author: Option<String>,
-    pub background: String,
-    pub caret: String,
-    pub foreground: String,
-    pub invisibles: String,
-    pub line_highlight: String,
-    pub selection: String,
-    pub settings: Vec<ThemeSetting>,
+const HIGHLIGHT_NAMES: [&str; 52] = [
+    "attribute",
+    "boolean",
+    "carriage-return",
+    "comment",
+    "comment.documentation",
+    "constant",
+    "constant.builtin",
+    "constructor",
+    "constructor.builtin",
+    "embedded",
+    "error",
+    "escape",
+    "function",
+    "function.builtin",
+    "keyword",
+    "markup",
+    "markup.bold",
+    "markup.heading",
+    "markup.italic",
+    "markup.link",
+    "markup.link.url",
+    "markup.list",
+    "markup.list.checked",
+    "markup.list.numbered",
+    "markup.list.unchecked",
+    "markup.list.unnumbered",
+    "markup.quote",
+    "markup.raw",
+    "markup.raw.block",
+    "markup.raw.inline",
+    "markup.strikethrough",
+    "module",
+    "number",
+    "operator",
+    "property",
+    "property.builtin",
+    "punctuation",
+    "punctuation.bracket",
+    "punctuation.delimiter",
+    "punctuation.special",
+    "string",
+    "string.escape",
+    "string.regexp",
+    "string.special",
+    "string.special.symbol",
+    "tag",
+    "type",
+    "type.builtin",
+    "variable",
+    "variable.builtin",
+    "variable.member",
+    "variable.parameter",
+];
+
+#[derive(Debug, PartialEq, EnumString)]
+#[strum(serialize_all = "snake_case")]
+enum ChunkType {
+    None,
+    Attribute,
+    Boolean,
+    CarriageReturn,
+    Comment,
+    #[strum(serialize = "comment.documentation")]
+    CommentDocumentation,
+    Constant,
+    #[strum(serialize = "constant.builtin")]
+    ConstantBuiltin,
+    Constructor,
+    #[strum(serialize = "constructor.builtin")]
+    ConstructorBuiltin,
+    Embedded,
+    Error,
+    Escape,
+    Function,
+    #[strum(serialize = "function.builtin")]
+    FunctionBuiltin,
+    Keyword,
+    Markup,
+    #[strum(serialize = "markup.bold")]
+    MarkupBold,
+    #[strum(serialize = "markup.heading")]
+    MarkupHeading,
+    #[strum(serialize = "markup.italic")]
+    MarkupItalic,
+    #[strum(serialize = "markup.link")]
+    MarkupLink,
+    #[strum(serialize = "markup.link.url")]
+    MarkupLinkUrl,
+    #[strum(serialize = "markup.list")]
+    MarkupList,
+    #[strum(serialize = "markup.list.checked")]
+    MarkupListChecked,
+    #[strum(serialize = "markup.list.numbered")]
+    MarkupListNumbered,
+    #[strum(serialize = "markup.list.unchecked")]
+    MarkupListUnchecked,
+    #[strum(serialize = "markup.list.unnumbered")]
+    MarkupListUnnumbered,
+    #[strum(serialize = "markup.quote")]
+    MarkupQuote,
+    #[strum(serialize = "markup.raw")]
+    MarkupRaw,
+    #[strum(serialize = "markup.raw.block")]
+    MarkupRawBlock,
+    #[strum(serialize = "markup.raw.inline")]
+    MarkupRawInline,
+    #[strum(serialize = "markup.strikethrough")]
+    MarkupStrikethrough,
+    Module,
+    Number,
+    Operator,
+    Property,
+    #[strum(serialize = "property.builtin")]
+    PropertyBuiltin,
+    Punctuation,
+    #[strum(serialize = "punctuation.bracket")]
+    PunctuationBracket,
+    #[strum(serialize = "punctuation.delimiter")]
+    PunctuationDelimiter,
+    #[strum(serialize = "punctuation.special")]
+    PunctuationSpecial,
+    String,
+    #[strum(serialize = "string.escape")]
+    StringEscape,
+    #[strum(serialize = "string.regexp")]
+    StringRegexp,
+    #[strum(serialize = "string.special")]
+    StringSpecial,
+    #[strum(serialize = "string.special.symbol")]
+    StringSpecialSymbol,
+    Tag,
+    Type,
+    #[strum(serialize = "type.builtin")]
+    TypeBuiltin,
+    Variable,
+    #[strum(serialize = "variable.builtin")]
+    VariableBuiltin,
+    #[strum(serialize = "variable.member")]
+    VariableMember,
+    #[strum(serialize = "variable.parameter")]
+    VariableParameter,
 }
 
-#[derive(Debug, Clone)]
-pub struct ThemeSetting {
-    pub scope: String,
-    pub settings: SettingAttributes,
+#[derive(Debug)]
+struct Chunk<'a> {
+    contents: &'a str,
+    start: usize,
+    end: usize,
+    typ: ChunkType,
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct SettingAttributes {
-    pub background: Option<String>,
-    pub foreground: Option<String>,
-    pub font_style: Option<FontStyle>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum FontStyle {
-    Normal,
-    Bold,
-    Italic,
-    BoldItalic,
-    Underline,
-}
-
-impl Theme {
-    pub fn parse<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let file_name = path.as_ref().to_str().unwrap().to_string();
-        let data = plist::Value::from_file(path)?;
-        let data = data.as_dictionary().unwrap();
-
-        let name = data
-            .get("name")
-            .unwrap_or(&Value::String(file_name))
-            .as_string()
-            .unwrap()
-            .to_string();
-        let author = data
-            .get("author")
-            .and_then(|v| v.as_string())
-            .map(|s| s.to_string());
-
-        let Some(settings) = data.get("settings").and_then(|s| s.as_array()) else {
-            return Err(ThemeParseError::MissingField("settings".to_string()).into());
-        };
-
-        let (main, settings): (Vec<_>, Vec<_>) = settings
-            .iter()
-            .partition(|s| s.as_dictionary().and_then(|d| d.get("name")).is_none());
-
-        println!("settings: {:#?}", settings);
-
-        let Some(main) = main
-            .first()
-            .and_then(|s| s.as_dictionary())
-            .and_then(|s| s.get("settings"))
-            .and_then(|s| s.as_dictionary())
-        else {
-            return Err(ThemeParseError::MissingField("main".to_string()).into());
-        };
-
-        fn get_setting(d: &Dictionary, key: &str) -> anyhow::Result<String> {
-            d.get(key)
-                .and_then(|v| v.as_string())
-                .and_then(|s| Some(s.to_string()))
-                .ok_or(ThemeParseError::MissingField(key.to_string()).into())
+impl Default for Chunk<'_> {
+    fn default() -> Self {
+        Chunk {
+            contents: "",
+            start: 0,
+            end: 0,
+            typ: ChunkType::None,
         }
-
-        let background = get_setting(&main, "background")?;
-        let caret = get_setting(&main, "caret")?;
-        let foreground = get_setting(&main, "foreground")?;
-        let invisibles = get_setting(&main, "invisibles")?;
-        let line_highlight = get_setting(&main, "lineHighlight")?;
-        let selection = get_setting(&main, "selection")?;
-
-        let settings = settings
-            .iter()
-            .map(|s| {
-                let s = s.as_dictionary().unwrap();
-                let scope = get_setting(&s, "scope").unwrap();
-
-                let settings = s.get("settings").and_then(|v| v.as_dictionary()).unwrap();
-                let background = settings
-                    .get("background")
-                    .and_then(|v| v.as_string())
-                    .and_then(|s| Some(s.to_string()));
-                let foreground = settings
-                    .get("foreground")
-                    .and_then(|v| v.as_string())
-                    .and_then(|s| Some(s.to_string()));
-                let font_style = settings
-                    .get("fontStyle")
-                    .and_then(|v| v.as_string())
-                    .and_then(|s| match s {
-                        "bold" => Some(FontStyle::Bold),
-                        "italic" => Some(FontStyle::Italic),
-                        "bold italic" => Some(FontStyle::BoldItalic),
-                        "underline" => Some(FontStyle::Underline),
-                        _ => None,
-                    });
-
-                ThemeSetting {
-                    scope,
-                    settings: SettingAttributes {
-                        background,
-                        foreground,
-                        font_style,
-                    },
-                }
-            })
-            .collect();
-
-        Ok(Theme {
-            name,
-            author,
-            background,
-            caret,
-            foreground,
-            invisibles,
-            line_highlight,
-            selection,
-            settings,
-        })
     }
 }
 
-#[allow(unused)]
-fn main() {
-    let highlight_names = &[
-        "attribute",
-        "constant",
-        "function.builtin",
-        "function",
-        "keyword",
-        "operator",
-        "property",
-        "punctuation",
-        "punctuation.bracket",
-        "punctuation.delimiter",
-        "string",
-        "string.special",
-        "tag",
-        "type",
-        "type.builtin",
-        "variable",
-        "variable.builtin",
-        "variable.parameter",
-    ];
+pub fn highlight(buffer: &[String], theme: &Theme) {}
 
+fn parse<'a>(
+    source: &'a str,
+    lang_config: &'a mut HighlightConfiguration,
+) -> anyhow::Result<Vec<Chunk<'a>>> {
     let mut highlighter = Highlighter::new();
-    let javascript_language = tree_sitter_javascript::language();
 
-    let mut javascript_config = HighlightConfiguration::new(
-        javascript_language,
-        tree_sitter_javascript::HIGHLIGHT_QUERY,
-        tree_sitter_javascript::INJECTION_QUERY,
-        tree_sitter_javascript::LOCALS_QUERY,
-    )
-    .unwrap();
-
-    javascript_config.configure(highlight_names);
-
-    let source = br#"
-    function x() { 
-        let x = 1 + 2; 
-    }
-    "#;
     let highlights = highlighter
-        .highlight(&javascript_config, source, None, |_| None)
+        .highlight(&lang_config, source.as_bytes(), None, |_| None)
         .unwrap();
+
+    let mut chunks = vec![];
+    let mut chunk = Chunk::default();
 
     for event in highlights {
         match event.unwrap() {
             HighlightEvent::Source { start, end } => {
-                let s = &source[start..end];
-                println!("{}", std::str::from_utf8(s).unwrap());
+                chunk.contents = &source[start..end];
+                chunk.start = start;
+                chunk.end = end;
             }
             HighlightEvent::HighlightStart(s) => {
-                let kind = highlight_names[s.0];
-                eprintln!("highlight style started: {kind}");
+                if !chunk.contents.is_empty() {
+                    // Push the previous chunk if it has content
+                    chunks.push(chunk);
+                    chunk = Chunk::default();
+                }
+
+                chunk.typ = ChunkType::from_str(HIGHLIGHT_NAMES[s.0]).unwrap();
             }
             HighlightEvent::HighlightEnd => {
-                eprintln!("highlight style ended");
+                chunks.push(chunk);
+                chunk = Chunk::default();
             }
         }
+    }
+
+    Ok(chunks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse() {
+        let javascript_language = tree_sitter_javascript::language();
+
+        let mut javascript_config = HighlightConfiguration::new(
+            javascript_language,
+            tree_sitter_javascript::HIGHLIGHT_QUERY,
+            tree_sitter_javascript::INJECTION_QUERY,
+            tree_sitter_javascript::LOCALS_QUERY,
+        )
+        .unwrap();
+
+        javascript_config.configure(&HIGHLIGHT_NAMES);
+
+        let source = r#"
+        function x() { 
+            let x = 1 + 2; 
+        }
+        "#;
+
+        let chunks = parse(&source, &mut javascript_config).unwrap();
+        assert_eq!(chunks.len(), 23);
+        assert_eq!(chunks[0].typ, ChunkType::None); // space and return before function
+        assert_eq!(chunks[1].typ, ChunkType::Keyword);
+        assert_eq!(chunks[1].contents, "function");
     }
 }
