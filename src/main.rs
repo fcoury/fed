@@ -161,38 +161,22 @@ impl Editor {
 
     pub fn draw(&mut self) -> anyhow::Result<()> {
         log!("draw");
-        // // gets all the lines within the viewport while clamping them to the right width
-        // let y0 = self.vtop;
-        // let y1 = cmp::min(self.vtop + self.vheight, self.buffer.len());
-        // let viewport_size = y1 - y0;
-        // let viewport = self.buffer[y0..y1].iter().map(|line| {
-        //     if line.len() > self.vwidth {
-        //         &line[self.vleft..self.vleft + self.vwidth]
-        //     } else {
-        //         line
-        //     }
-        // });
-        //
-        // for (y, line) in viewport.enumerate() {
-        //     stdout().queue(cursor::MoveTo(0, y as u16))?;
-        //     stdout().queue(Print(line))?;
-        //     if line.len() < self.vwidth {
-        //         stdout().queue(Print(" ".repeat(self.vwidth - line.len())))?;
-        //     }
-        // }
+
+        self.draw_buffer()?;
+        self.draw_statusline()?;
+
+        self.adjust_cursor();
+        self.draw_cursor()?;
+
+        stdout().flush()?;
+        Ok(())
+    }
+
+    pub fn draw_buffer(&mut self) -> anyhow::Result<()> {
+        log!("draw_buffer");
 
         let viewport = Viewport::new(self.vtop, self.vleft, self.vwidth, self.vheight);
         highlight(&self.buffer, &self.theme, &viewport)?;
-
-        // fill the rest of the viewport
-        // for y in viewport_size..self.vheight {
-        //     stdout().queue(cursor::MoveTo(0, y as u16))?;
-        //     stdout().queue(Print(" ".repeat(self.vwidth)))?;
-        // }
-
-        self.adjust_cursor();
-        self.draw_statusline()?;
-        self.draw_cursor()?;
 
         stdout().flush()?;
         Ok(())

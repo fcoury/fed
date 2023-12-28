@@ -267,6 +267,7 @@ impl<'a> Chunk<'a> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Viewport {
     top: usize,
     left: usize,
@@ -284,7 +285,7 @@ impl Viewport {
         }
     }
 
-    pub fn clamp_lines<'a>(&self, buffer: &'a [String]) -> anyhow::Result<&'a [String]> {
+    pub fn clamp_lines<'a, T>(&self, buffer: &'a [T]) -> anyhow::Result<&'a [T]> {
         let y0 = self.top;
         let y1 = cmp::min(self.top + self.height, buffer.len());
         Ok(&buffer[y0..y1])
@@ -363,12 +364,16 @@ pub fn highlight(buffer: &[String], theme: &Theme, viewport: &Viewport) -> anyho
     let rust_parser = rust_parser();
     let buffer = buffer.join("\n");
     let chunks = parse(&buffer, &rust_parser)?;
-    let lines = split_chunks(chunks);
+    let chunks = split_chunks(chunks);
+    log!("{:?}", viewport);
+    let lines = viewport.clamp_lines(&chunks)?;
+
+    stdout().queue(cursor::MoveTo(0, 0))?;
 
     for line in lines {
         clear_line(theme, viewport)?;
 
-        for chunk in line {
+        for chunk in line.iter() {
             let chunk_type = chunk.typ.to_string();
             let mut fg = &theme.foreground;
             let mut bg = &theme.background;
@@ -406,9 +411,6 @@ fn parse<'a>(
     lang_config: &'a HighlightConfiguration,
 ) -> anyhow::Result<Vec<Chunk<'a>>> {
     let mut highlighter = Highlighter::new();
-
-    log!("source: {:?}", source);
-
     let highlights = highlighter
         .highlight(&lang_config, source.as_bytes(), None, |_| None)
         .unwrap();
