@@ -5,10 +5,6 @@ use std::{
     time::Duration,
 };
 
-mod log;
-
-static LOGGER: OnceCell<Logger> = OnceCell::new();
-
 use crossterm::{
     cursor::{self, SetCursorStyle},
     event::{self, Event, KeyCode, KeyEvent},
@@ -18,6 +14,12 @@ use crossterm::{
 };
 use log::Logger;
 use once_cell::sync::OnceCell;
+
+mod error;
+mod log;
+mod syntax;
+
+static LOGGER: OnceCell<Logger> = OnceCell::new();
 
 #[macro_export]
 macro_rules! log {
@@ -78,7 +80,7 @@ impl Editor {
             vleft: 0,
             vtop: 0,
             vwidth: width as usize,
-            vheight: height as usize - 1,
+            vheight: height as usize - 2,
             ..Default::default()
         })
     }
@@ -113,6 +115,7 @@ impl Editor {
     }
 
     pub fn draw_statusline(&mut self) -> anyhow::Result<()> {
+        let y = self.height as u16 - 2;
         let line = " ".repeat(self.width);
         let mode = format!(" {:?} ", self.mode).to_uppercase();
         let pos = format!(" {}:{} ", self.y(), self.x());
@@ -123,13 +126,13 @@ impl Editor {
             g: 70,
             b: 88,
         };
-        stdout().queue(cursor::MoveTo(0, self.height as u16 - 1))?;
+        stdout().queue(cursor::MoveTo(0, y))?;
         stdout().queue(PrintStyledContent(line.on(bar_bg)))?;
 
         // mode
         let mode_fg = Color::Rgb { r: 0, g: 0, b: 0 };
         let mode_bg = Color::White;
-        stdout().queue(cursor::MoveTo(0, self.height as u16 - 1))?;
+        stdout().queue(cursor::MoveTo(0, y))?;
         stdout().queue(PrintStyledContent(mode.bold().with(mode_fg).on(mode_bg)))?;
 
         // filename
@@ -143,10 +146,7 @@ impl Editor {
             g: 145,
             b: 236,
         };
-        stdout().queue(cursor::MoveTo(
-            self.width as u16 - pos.len() as u16,
-            self.height as u16 - 1,
-        ))?;
+        stdout().queue(cursor::MoveTo(self.width as u16 - pos.len() as u16, y))?;
         stdout().queue(PrintStyledContent(pos.bold().with(pos_fg).on(pos_bg)))?;
 
         stdout().flush()?;
