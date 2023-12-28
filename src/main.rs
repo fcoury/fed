@@ -8,12 +8,15 @@ use std::{
 use crossterm::{
     cursor::{self, SetCursorStyle},
     event::{self, Event, KeyCode, KeyEvent},
-    style::{Color, Print, PrintStyledContent, Stylize},
+    style::{Color, PrintStyledContent, Stylize},
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand, QueueableCommand,
 };
 use log::Logger;
 use once_cell::sync::OnceCell;
+use theme::Theme;
+
+use crate::syntax::{highlight, Viewport};
 
 mod error;
 mod log;
@@ -42,6 +45,7 @@ enum Mode {
 #[allow(unused)]
 #[derive(Default)]
 struct Editor {
+    theme: Theme,
     mode: Mode,
     buffer: Vec<String>,
     name: String,
@@ -57,7 +61,7 @@ struct Editor {
 }
 
 impl Editor {
-    pub fn new(file: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(theme: Theme, file: Option<String>) -> anyhow::Result<Self> {
         let (width, height) = terminal::size()?;
 
         log!("terminal size = {}x{}", width, height);
@@ -72,6 +76,7 @@ impl Editor {
 
         Ok(Self {
             mode: Mode::Normal,
+            theme,
             buffer,
             name,
             width: width as usize,
@@ -156,31 +161,34 @@ impl Editor {
 
     pub fn draw(&mut self) -> anyhow::Result<()> {
         log!("draw");
-        // gets all the lines within the viewport while clamping them to the right width
-        let y0 = self.vtop;
-        let y1 = cmp::min(self.vtop + self.vheight, self.buffer.len());
-        let viewport_size = y1 - y0;
-        let viewport = self.buffer[y0..y1].iter().map(|line| {
-            if line.len() > self.vwidth {
-                &line[self.vleft..self.vleft + self.vwidth]
-            } else {
-                line
-            }
-        });
+        // // gets all the lines within the viewport while clamping them to the right width
+        // let y0 = self.vtop;
+        // let y1 = cmp::min(self.vtop + self.vheight, self.buffer.len());
+        // let viewport_size = y1 - y0;
+        // let viewport = self.buffer[y0..y1].iter().map(|line| {
+        //     if line.len() > self.vwidth {
+        //         &line[self.vleft..self.vleft + self.vwidth]
+        //     } else {
+        //         line
+        //     }
+        // });
+        //
+        // for (y, line) in viewport.enumerate() {
+        //     stdout().queue(cursor::MoveTo(0, y as u16))?;
+        //     stdout().queue(Print(line))?;
+        //     if line.len() < self.vwidth {
+        //         stdout().queue(Print(" ".repeat(self.vwidth - line.len())))?;
+        //     }
+        // }
 
-        for (y, line) in viewport.enumerate() {
-            stdout().queue(cursor::MoveTo(0, y as u16))?;
-            stdout().queue(Print(line))?;
-            if line.len() < self.vwidth {
-                stdout().queue(Print(" ".repeat(self.vwidth - line.len())))?;
-            }
-        }
+        let viewport = Viewport::new(self.vtop, self.vleft, self.vwidth, self.vheight);
+        highlight(&self.buffer, &self.theme, &viewport)?;
 
         // fill the rest of the viewport
-        for y in viewport_size..self.vheight {
-            stdout().queue(cursor::MoveTo(0, y as u16))?;
-            stdout().queue(Print(" ".repeat(self.vwidth)))?;
-        }
+        // for y in viewport_size..self.vheight {
+        //     stdout().queue(cursor::MoveTo(0, y as u16))?;
+        //     stdout().queue(Print(" ".repeat(self.vwidth)))?;
+        // }
 
         self.adjust_cursor();
         self.draw_statusline()?;
@@ -620,8 +628,14 @@ fn main() {
     init_logger();
 
     let file = std::env::args().nth(1);
+    let theme = std::env::args()
+        .nth(2)
+        .unwrap_or("src/fixtures/GitHub.tmTheme".to_string());
+    log!("theme: {}", theme);
+    let theme = Theme::parse(theme).unwrap();
+    log!("theme: {:#?}", theme);
 
-    let mut editor = match Editor::new(file) {
+    let mut editor = match Editor::new(theme, file) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Failed to initialize editor: {}", e);

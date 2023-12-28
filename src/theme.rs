@@ -41,6 +41,10 @@ pub enum FontStyle {
 }
 
 impl Theme {
+    pub fn get_scope(&self, scope: &str) -> Option<&ThemeSetting> {
+        self.settings.iter().find(|s| s.scope == scope)
+    }
+
     pub fn parse<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let file_name = path.as_ref().to_str().unwrap().to_string();
         let data = plist::Value::from_file(path)?;
