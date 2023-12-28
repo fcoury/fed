@@ -20,7 +20,7 @@ pub struct Theme {
 
 #[derive(Debug, Clone)]
 pub struct ThemeSetting {
-    pub scope: String,
+    pub scopes: Vec<String>,
     pub settings: SettingAttributes,
 }
 
@@ -42,7 +42,8 @@ pub enum FontStyle {
 
 impl Theme {
     pub fn get_scope(&self, scope: &str) -> Option<&ThemeSetting> {
-        self.settings.iter().find(|s| s.scope == scope)
+        let scope = scope.to_string();
+        self.settings.iter().find(|s| s.scopes.contains(&scope))
     }
 
     pub fn parse<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
@@ -62,14 +63,16 @@ impl Theme {
             .map(|s| s.to_string());
 
         let Some(settings) = data.get("settings").and_then(|s| s.as_array()) else {
-            return Err(ThemeParseError::MissingField("settings".to_string()).into());
+            return Err(ThemeParseError::MissingDictionaryField(
+                data.clone(),
+                "settings".to_string(),
+            )
+            .into());
         };
 
         let (main, settings): (Vec<_>, Vec<_>) = settings
             .iter()
             .partition(|s| s.as_dictionary().and_then(|d| d.get("name")).is_none());
-
-        println!("settings: {:#?}", settings);
 
         let Some(main) = main
             .first()
@@ -80,25 +83,33 @@ impl Theme {
             return Err(ThemeParseError::MissingField("main".to_string()).into());
         };
 
-        fn get_setting(d: &Dictionary, key: &str) -> anyhow::Result<String> {
+        fn get_mandatory_setting(d: &Dictionary, key: &str) -> anyhow::Result<String> {
             d.get(key)
                 .and_then(|v| v.as_string())
                 .and_then(|s| Some(s.to_string()))
-                .ok_or(ThemeParseError::MissingField(key.to_string()).into())
+                .ok_or(ThemeParseError::MissingDictionaryField(d.clone(), key.to_string()).into())
         }
 
-        let background = get_setting(&main, "background")?;
-        let caret = get_setting(&main, "caret")?;
-        let foreground = get_setting(&main, "foreground")?;
-        let invisibles = get_setting(&main, "invisibles")?;
-        let line_highlight = get_setting(&main, "lineHighlight")?;
-        let selection = get_setting(&main, "selection")?;
+        fn get_setting(d: &Dictionary, key: &str) -> Option<String> {
+            d.get(key)
+                .and_then(|v| v.as_string())
+                .map(|s| s.to_string())
+        }
+
+        let background = get_mandatory_setting(&main, "background")?;
+        let caret = get_mandatory_setting(&main, "caret")?;
+        let foreground = get_mandatory_setting(&main, "foreground")?;
+        let invisibles = get_mandatory_setting(&main, "invisibles")?;
+        let line_highlight = get_mandatory_setting(&main, "lineHighlight")?;
+        let selection = get_mandatory_setting(&main, "selection")?;
 
         let settings = settings
             .iter()
-            .map(|s| {
+            .filter_map(|s| {
                 let s = s.as_dictionary().unwrap();
-                let scope = get_setting(&s, "scope").unwrap();
+                let Some(scope) = get_setting(&s, "scope") else {
+                    return None;
+                };
 
                 let settings = s.get("settings").and_then(|v| v.as_dictionary()).unwrap();
                 let background = settings
@@ -120,14 +131,16 @@ impl Theme {
                         _ => None,
                     });
 
-                ThemeSetting {
-                    scope,
+                let scopes = scope.split(",").map(|s| s.trim().to_string()).collect();
+
+                Some(ThemeSetting {
+                    scopes,
                     settings: SettingAttributes {
                         background,
                         foreground,
                         font_style,
                     },
-                }
+                })
             })
             .collect();
 

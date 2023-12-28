@@ -127,7 +127,7 @@ lazy_static! {
     );
 }
 
-#[derive(Debug, PartialEq, EnumString, Display)]
+#[derive(Clone, Debug, PartialEq, EnumString, Display)]
 #[strum(serialize_all = "snake_case")]
 enum ChunkType {
     None,
@@ -216,7 +216,7 @@ enum ChunkType {
     VariableParameter,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct Chunk<'a> {
     contents: &'a str,
     start: usize,
@@ -232,6 +232,38 @@ impl Default for Chunk<'_> {
             end: 0,
             typ: ChunkType::None,
         }
+    }
+}
+
+impl<'a> Chunk<'a> {
+    fn with_type(typ: ChunkType) -> Self {
+        Chunk {
+            typ,
+            ..Chunk::default()
+        }
+    }
+
+    fn from_source(start: usize, end: usize, contents: &'a str) -> Self {
+        Chunk {
+            contents,
+            start,
+            end,
+            ..Chunk::default()
+        }
+    }
+
+    fn split(&self, ch: char) -> Vec<Chunk<'a>> {
+        let mut chunks = vec![];
+
+        for (i, line) in self.contents.split(ch).enumerate() {
+            let mut chunk = Chunk::from_source(self.start, self.end, line);
+            if i == 0 {
+                chunk.typ = self.typ.clone();
+            }
+            chunks.push(chunk);
+        }
+
+        chunks
     }
 }
 
@@ -284,40 +316,86 @@ fn hex_to_crossterm_color(hex: &str) -> Result<style::Color, ParseIntError> {
     Ok(style::Color::Rgb { r, g, b })
 }
 
+fn split_chunks(chunks: Vec<Chunk>) -> Vec<Vec<Chunk>> {
+    let mut lines: Vec<Vec<Chunk>> = vec![];
+    let mut current_line: Vec<Chunk> = vec![];
+
+    for chunk in chunks {
+        if chunk.contents.contains('\n') {
+            let mut chunks = chunk.split('\n');
+            // pushes the first chunk to the current line
+            current_line.push(chunks.remove(0));
+            // this line is done, because the previous chunk ended with \n
+            lines.push(current_line);
+
+            // pushes all the intermediary items alone to lines
+            for chunk in chunks[0..chunks.len() - 1].iter() {
+                lines.push(vec![chunk.clone()]);
+            }
+
+            // and the last item to current_line
+            current_line = vec![chunks[chunks.len() - 1].clone()];
+        } else {
+            current_line.push(chunk);
+        }
+    }
+
+    lines.push(current_line);
+
+    lines
+}
+
+fn clear_line(theme: &Theme, viewport: &Viewport) -> anyhow::Result<()> {
+    let fg = hex_to_crossterm_color(&theme.foreground)?;
+    let bg = hex_to_crossterm_color(&theme.background)?;
+
+    stdout().queue(style::SetForegroundColor(fg))?;
+    stdout().queue(style::SetBackgroundColor(bg))?;
+
+    stdout().queue(cursor::MoveToColumn(0))?;
+    stdout().queue(style::Print(" ".repeat(viewport.width)))?;
+    stdout().queue(cursor::MoveToColumn(0))?;
+
+    Ok(())
+}
+
 pub fn highlight(buffer: &[String], theme: &Theme, viewport: &Viewport) -> anyhow::Result<()> {
     let rust_parser = rust_parser();
-    let visible_lines = viewport.clamp_lines(buffer)?;
+    let buffer = buffer.join("\n");
+    let chunks = parse(&buffer, &rust_parser)?;
+    let lines = split_chunks(chunks);
 
-    for (y, line) in visible_lines.iter().enumerate() {
-        let fg = hex_to_crossterm_color(&theme.foreground)?;
-        let bg = hex_to_crossterm_color(&theme.background)?;
+    for line in lines {
+        clear_line(theme, viewport)?;
 
-        stdout().queue(style::SetForegroundColor(fg))?;
-        stdout().queue(style::SetBackgroundColor(bg))?;
-        stdout().queue(cursor::MoveTo(0, y as u16))?;
-        stdout().queue(style::Print(" ".repeat(viewport.width)))?;
-        stdout().queue(cursor::MoveTo(0, y as u16))?;
-
-        let chunks = parse(line, &rust_parser)?;
-        for chunk in chunks {
+        for chunk in line {
             let chunk_type = chunk.typ.to_string();
+            let mut fg = &theme.foreground;
+            let mut bg = &theme.background;
+
+            // checks for the theme color
             if let Some(scope) = TS_TO_THEME.get(&chunk_type) {
                 if let Some(setting) = theme.get_scope(scope) {
-                    if let Some(fg) = &setting.settings.foreground {
-                        let fg = hex_to_crossterm_color(fg)?;
-                        stdout().queue(style::SetForegroundColor(fg))?;
+                    if let Some(setting_fg) = &setting.settings.foreground {
+                        fg = setting_fg;
                     }
 
-                    if let Some(bg) = &setting.settings.background {
-                        let bg = hex_to_crossterm_color(bg)?;
-                        stdout().queue(style::SetBackgroundColor(bg))?;
+                    if let Some(setting_bg) = &setting.settings.background {
+                        bg = setting_bg;
                     }
                 }
             }
 
-            log!("chunk: {:?}", chunk.typ);
+            let setting_fg = hex_to_crossterm_color(fg)?;
+            let setting_bg = hex_to_crossterm_color(bg)?;
+            stdout().queue(style::SetForegroundColor(setting_fg))?;
+            stdout().queue(style::SetBackgroundColor(setting_bg))?;
+
+            // log!("chunk {:?}: {:?} {fg}:{bg}", chunk.typ, chunk.contents);
             stdout().queue(style::Print(chunk.contents))?;
         }
+
+        stdout().queue(cursor::MoveToNextLine(1))?;
     }
 
     Ok(())
@@ -329,34 +407,48 @@ fn parse<'a>(
 ) -> anyhow::Result<Vec<Chunk<'a>>> {
     let mut highlighter = Highlighter::new();
 
+    log!("source: {:?}", source);
+
     let highlights = highlighter
         .highlight(&lang_config, source.as_bytes(), None, |_| None)
         .unwrap();
 
     let mut chunks = vec![];
-    let mut chunk = Chunk::default();
+    let mut chunk: Option<Chunk<'_>> = None;
 
     for event in highlights {
-        match event.unwrap() {
+        let event = event?;
+        match event {
             HighlightEvent::Source { start, end } => {
-                chunk.contents = &source[start..end];
-                chunk.start = start;
-                chunk.end = end;
+                if let Some(ref mut chunk) = chunk {
+                    chunk.contents = &source[start..end];
+                    chunk.start = start;
+                    chunk.end = end;
+                } else {
+                    chunk = Some(Chunk::from_source(start, end, &source[start..end]));
+                }
             }
             HighlightEvent::HighlightStart(s) => {
-                if !chunk.contents.is_empty() {
+                if let Some(chunk) = chunk.take() {
                     // Push the previous chunk if it has content
                     chunks.push(chunk);
-                    chunk = Chunk::default();
                 }
 
-                chunk.typ = ChunkType::from_str(HIGHLIGHT_NAMES[s.0]).unwrap();
+                chunk = Some(Chunk::with_type(
+                    ChunkType::from_str(HIGHLIGHT_NAMES[s.0]).expect("Invalid highlighting type"),
+                ));
             }
             HighlightEvent::HighlightEnd => {
-                chunks.push(chunk);
-                chunk = Chunk::default();
+                if let Some(chunk) = chunk.take() {
+                    chunks.push(chunk);
+                }
+                chunk = None;
             }
         }
+    }
+
+    if let Some(chunk) = chunk.take() {
+        chunks.push(chunk);
     }
 
     Ok(chunks)
@@ -413,5 +505,61 @@ mod tests {
         assert_eq!(chunks[0].typ, ChunkType::None); // space and return before function
         assert_eq!(chunks[1].typ, ChunkType::Keyword);
         assert_eq!(chunks[1].contents, "function");
+    }
+
+    #[test]
+    fn test_split_chunk() {
+        let chunk = Chunk {
+            contents: "Hello, world!\nThis is a test",
+            start: 0,
+            end: 0,
+            typ: ChunkType::None,
+        };
+
+        let chunks = chunk.split('\n');
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].contents, "Hello, world!");
+        assert_eq!(chunks[1].contents, "This is a test");
+    }
+
+    #[test]
+    fn test_split_chunks() {
+        let chunks = vec![
+            Chunk {
+                contents: "function main() {\n    ",
+                start: 0,
+                end: 0,
+                typ: ChunkType::None,
+            },
+            Chunk {
+                contents: "println!(\"Hello, world!\");\n}",
+                start: 0,
+                end: 0,
+                typ: ChunkType::None,
+            },
+        ];
+
+        let lines = split_chunks(chunks);
+        println!("lines: {:?}", lines);
+        let line = lines[0]
+            .iter()
+            .map(|c| c.contents)
+            .collect::<Vec<&str>>()
+            .join("");
+        assert_eq!(line, "function main() {");
+
+        let line = lines[1]
+            .iter()
+            .map(|c| c.contents)
+            .collect::<Vec<&str>>()
+            .join("");
+        assert_eq!(line, "    println!(\"Hello, world!\");");
+
+        let line = lines[2]
+            .iter()
+            .map(|c| c.contents)
+            .collect::<Vec<&str>>()
+            .join("");
+        assert_eq!(line, "}");
     }
 }
