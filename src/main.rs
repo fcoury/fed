@@ -141,7 +141,11 @@ impl Editor {
 
         // mode
         let mode_fg = Color::Rgb { r: 0, g: 0, b: 0 };
-        let mode_bg = Color::White;
+        let mode_bg = Color::Rgb {
+            r: 178,
+            g: 145,
+            b: 236,
+        };
         stdout().queue(cursor::MoveTo(0, y))?;
         stdout().queue(PrintStyledContent(mode.bold().with(mode_fg).on(mode_bg)))?;
 
