@@ -40,6 +40,16 @@ macro_rules! log {
     };
 }
 
+#[macro_export]
+macro_rules! warn {
+    ($($arg:tt)*) => {
+        {
+            let log_message = format!($($arg)*);
+            $crate::LOGGER.get().expect("Logger not initialized").log(&log_message);
+        }
+    };
+}
+
 #[derive(Default, Debug)]
 enum Mode {
     #[default]
@@ -161,28 +171,27 @@ impl Editor {
     }
 
     pub fn draw_editor(&mut self) -> anyhow::Result<()> {
-        self.draw_gutter()?;
         self.draw_buffer()?;
-        self.draw_statusline()?;
         self.draw_commandline()?;
         Ok(())
     }
 
-    pub fn draw(&mut self, redraw: bool) -> anyhow::Result<()> {
+    pub fn draw(&mut self, _redraw: bool) -> anyhow::Result<()> {
         log!("draw");
 
-        if redraw || self.pending_redraw {
-            self.pending_redraw = false;
-            self.draw_editor()?;
-        }
+        // TODO: add diff detection for all changes
+        self.pending_redraw = false;
+        self.adjust_cursor();
+        self.draw_editor()?;
+        self.draw_statusline()?;
+        self.draw_gutter()?;
 
         if self.mode.is_command() {
-            self.handle_commandline();
+            self.handle_commandline()?;
             self.draw_editor()?;
         }
 
-        self.adjust_cursor();
-        self.draw_cursor();
+        self.draw_cursor()?;
 
         stdout().flush()?;
         Ok(())
@@ -192,7 +201,7 @@ impl Editor {
         let y = self.height as u16 - 2;
         let line = " ".repeat(self.width);
         let mode = format!(" {:?} ", self.mode).to_uppercase();
-        let pos = format!(" {}:{} ", self.y(), self.x());
+        let pos = format!(" {}:{} ", self.by(), self.cx);
         let filename = format!(" {} ", self.name);
 
         let bar_bg = Color::Rgb {
@@ -304,15 +313,11 @@ impl Editor {
             return;
         }
 
-        if self.y() >= self.buffer.len() {
-            self.cy = self.buffer.len() - 1;
-        }
+        // if self.by() >= self.buffer.len() - 1 {
+        //     self.cy = self.buffer.len() - 1;
+        // }
 
-        if self.cx < 0 {
-            self.cx = 0;
-        }
-
-        let max_x = self.line().len();
+        let max_x = self.current_line_len();
 
         log!(
             "adjust_cursor: cx: {}, cy: {}, vleft: {}, vtop: {}, max_x: {}",
@@ -354,38 +359,43 @@ impl Editor {
         Ok(())
     }
 
-    fn move_down(&mut self) -> anyhow::Result<bool> {
+    fn move_down(&mut self) -> bool {
+        let desired_cy = self.cy + 1;
+
         log!(
-            "move_down: cx: {}, cy: {}, vleft: {}, vtop: {}",
-            self.cx,
-            self.cy,
-            self.vleft,
-            self.vtop
+            "checking if inside viewport: {} < {}",
+            desired_cy,
+            self.vheight
         );
-        let mut redraw = false;
-        if self.y() < self.vheight - 1 {
-            if self.y() < self.buffer.len() {
-                self.cy += 1;
+        // checks if we are within the viewport bounds horizontally
+        if desired_cy <= self.vheight {
+            log!("we are inside the viewport");
+
+            log!(
+                "checking if we are inside the buffer: {} > {}",
+                self.buffer.len(),
+                self.vtop + desired_cy,
+            );
+            // checks if we are inside the buffer
+            if self.buffer.len() > self.vtop + desired_cy {
+                log!("we are inside the buffer");
+                self.cy = desired_cy;
+                return true;
             }
-        } else {
-            self.vtop += 1;
-            redraw = true;
+
+            // we would go outside the buffer, does nothing
+            return false;
         }
-        log!(
-            "move_down: cx: {}, cy: {}, vleft: {}, vtop: {}, vwidth: {}, vheight: {}",
-            self.cx,
-            self.cy,
-            self.vleft,
-            self.vtop,
-            self.vwidth,
-            self.vheight,
-        );
-        Ok(redraw)
+
+        // we are not within the bounds of the viewport, let's just scroll it one row down and keep
+        // the cursor at the same position
+        self.vtop += 1;
+        true
     }
 
     fn move_up(&mut self) -> anyhow::Result<bool> {
         // if we are inside the viewport
-        if self.cy > self.vtop {
+        if self.cy > 0 {
             self.cy -= 1;
         } else {
             // if we are at the top of the viewport
@@ -397,6 +407,10 @@ impl Editor {
         Ok(false)
     }
 
+    fn current_line_len(&self) -> usize {
+        self.line().map(|s| s.len()).unwrap_or(0)
+    }
+
     fn move_right(&mut self) -> anyhow::Result<bool> {
         log!("move_right");
 
@@ -404,12 +418,12 @@ impl Editor {
 
         // if we're inside the viewport
         if self.cx < self.vwidth - 1 {
-            if self.x() < self.line().len() {
+            if self.bx() < self.current_line_len() {
                 self.cx += 1;
             }
         } else {
             // if we're at the right edge of the viewport
-            if self.vleft < self.line().len() - 1 {
+            if self.vleft < self.line().map(|s| s.len() - 1).unwrap_or(0) {
                 self.vleft += 1;
                 self.cx += 1;
                 redraw = true;
@@ -434,7 +448,7 @@ impl Editor {
     }
 
     fn move_end_of_line(&mut self) -> anyhow::Result<bool> {
-        self.cx = self.line().len() - 1;
+        self.cx = self.current_line_len() - 1;
         Ok(false)
     }
 
@@ -443,12 +457,12 @@ impl Editor {
         Ok(false)
     }
 
-    fn x(&self) -> usize {
+    fn bx(&self) -> usize {
         self.cx + self.vleft
     }
 
-    fn y(&self) -> usize {
-        self.cy + self.vtop
+    fn by(&self) -> usize {
+        self.vtop + self.cy
     }
 
     fn handle_input(&mut self, ev: Event) -> anyhow::Result<bool> {
@@ -464,8 +478,8 @@ impl Editor {
         }
     }
 
-    fn line(&self) -> &String {
-        self.buffer.get(self.y()).expect("line out of bounds")
+    fn line(&self) -> Option<&String> {
+        self.buffer.get(self.by())
     }
 
     fn handle_generic_input(&mut self, ev: &Event) -> anyhow::Result<bool> {
@@ -527,7 +541,7 @@ impl Editor {
                         self.mode = Mode::Command;
                     }
                     'o' => {
-                        self.move_down()?;
+                        self.move_down();
                         self.insert_line()?;
                         self.mode = Mode::Insert;
                         redraw = true;
@@ -538,18 +552,21 @@ impl Editor {
                         redraw = true;
                     }
                     'x' => {
-                        let x = self.x();
-                        let y = self.y();
-                        let line = self.line();
-                        if x < line.len() {
-                            let line = self.buffer.get_mut(y).expect("line out of bounds");
-                            line.remove(x);
+                        let x = self.bx();
+                        let y = self.by();
+                        if let Some(line) = self.line() {
+                            if x < line.len() {
+                                let line = self.buffer.get_mut(y).expect("line out of bounds");
+                                line.remove(x);
+                            }
+                            redraw = true;
+                        } else {
+                            warn!("line out of bounds: x: {}, y: {}", x, y);
                         }
-                        redraw = true;
                     }
                     'd' => match self.waiting_key {
                         Some('d') => {
-                            self.buffer.remove(self.y());
+                            self.buffer.remove(self.by());
                             self.waiting_key = None;
                             redraw = true;
                         }
@@ -558,17 +575,20 @@ impl Editor {
                         }
                     },
                     'J' => {
-                        let line = self.line();
-                        let empty = String::new();
-                        let next_line = self.buffer.get(self.y() + 1).unwrap_or(&empty);
-                        let new_line = format!("{} {}", line, next_line);
-                        let y = self.y();
-                        self.buffer[y] = new_line;
-                        self.buffer.remove(self.y() + 1);
-                        redraw = true;
+                        if let Some(line) = self.line() {
+                            let empty = String::new();
+                            let next_line = self.buffer.get(self.by() + 1).unwrap_or(&empty);
+                            let new_line = format!("{} {}", line, next_line);
+                            let y = self.by();
+                            self.buffer[y] = new_line;
+                            self.buffer.remove(self.by() + 1);
+                            redraw = true;
+                        } else {
+                            warn!("line out of bounds: x: {}, y: {}", self.bx(), self.by());
+                        }
                     }
                     'j' => {
-                        redraw = self.move_down()?;
+                        redraw = self.move_down();
                     }
                     'k' => {
                         redraw = self.move_up()?;
@@ -591,7 +611,7 @@ impl Editor {
                     _ => {}
                 },
                 KeyCode::Down => {
-                    self.move_down()?;
+                    redraw = self.move_down();
                 }
                 KeyCode::Up => {
                     self.move_up()?;
@@ -615,47 +635,74 @@ impl Editor {
     }
 
     fn move_to_next_page(&mut self) -> anyhow::Result<()> {
-        self.vtop = cmp::min(self.vtop + self.vheight, self.buffer.len() - 1);
+        let desired_vtop = self.vtop + self.vheight;
+        log!(
+            "desired_vtop: {} buffer_len: {}",
+            desired_vtop,
+            self.buffer.len()
+        );
+        if desired_vtop < self.buffer.len() - 1 {
+            // if there's room for a new page, moves to it
+            self.vtop += self.vheight;
+        } else {
+            // otherwise, move to the last line of the current viewport
+            self.cy += self.vheight - 1;
+        }
+
+        Ok(())
+    }
+
+    fn move_to_buffer_bottom(&mut self) -> anyhow::Result<()> {
+        self.vtop = self.buffer.len() - self.vheight;
         Ok(())
     }
 
     fn move_to_previous_page(&mut self) -> anyhow::Result<()> {
-        if self.vtop > 0 {
+        if self.vtop > self.vheight {
             self.vtop -= self.vheight;
+        } else {
+            self.vtop = 0;
         }
         Ok(())
     }
 
     fn move_to_next_word(&mut self) -> anyhow::Result<bool> {
-        let nx = self
-            .line()
-            .chars()
-            .skip(self.x())
-            .position(|c| c.is_whitespace());
-        match nx {
-            Some(x) => {
-                self.cx += x + 1;
+        if let Some(line) = self.line() {
+            let x = self.bx();
+            let mut nx = line.chars().skip(x).position(|c| c.is_whitespace());
+            if nx.is_none() {
+                nx = Some(line.len() - x);
             }
-            None => {
-                self.cx = self.line().len() - 1;
+            match nx {
+                Some(x) => {
+                    self.cx += x + 1;
+                }
+                None => {
+                    self.cx = line.len() - 1;
+                }
             }
         }
         Ok(false)
     }
 
     fn move_to_previous_word(&mut self) {
-        let px = self
-            .line()
-            .chars()
-            .rev()
-            .skip(self.line().len() - self.x() + 1)
-            .position(|c| c.is_whitespace());
-        match px {
-            Some(x) => {
-                self.cx -= x + 1;
+        if let Some(line) = self.line() {
+            let x = self.bx();
+            let mut px = line
+                .chars()
+                .rev()
+                .skip(line.len() - x + 1)
+                .position(|c| c.is_whitespace());
+            if px.is_none() {
+                px = Some(line.len() - x);
             }
-            None => {
-                self.cx = 0;
+            match px {
+                Some(x) => {
+                    self.cx -= x + 1;
+                }
+                None => {
+                    self.cx = 0;
+                }
             }
         }
     }
@@ -696,34 +743,36 @@ impl Editor {
     }
 
     fn at_end_of_line(&self) -> bool {
-        self.x() == self.line().len()
+        self.bx() == self.line().map(|s| s.len()).unwrap_or(0)
     }
 
     fn split_line_at_cursor(&mut self) -> anyhow::Result<()> {
         if self.at_end_of_line() {
-            self.move_down()?;
+            self.move_down();
             self.insert_line()?;
             return Ok(());
         }
 
-        let x = self.x();
-        let y = self.y();
+        let x = self.bx();
+        let y = self.by();
 
-        let line = self.line().clone();
-        let (left, right) = line.split_at(x);
+        let line = self.line().cloned();
+        if let Some(line) = line {
+            let (left, right) = line.split_at(x).clone();
 
-        let line = self.buffer.get_mut(y).expect("line out of bounds");
-        *line = left.to_string();
+            let line = self.buffer.get_mut(y).expect("line out of bounds");
+            *line = left.to_string();
 
-        self.buffer.insert(y + 1, right.to_string());
-        self.move_down()?;
-        self.move_start_of_line()?;
+            self.buffer.insert(y + 1, right.to_string());
+            self.move_down();
+            self.move_start_of_line()?;
+        }
         Ok(())
     }
 
     fn insert_char(&mut self, c: char) -> anyhow::Result<()> {
-        let x = self.x();
-        let y = self.y();
+        let x = self.bx();
+        let y = self.by();
 
         log!("Insert char {} at ({}, {})", c, x, y);
         let line = self.buffer.get_mut(y).expect("line out of bounds");
@@ -732,13 +781,13 @@ impl Editor {
     }
 
     fn insert_line(&mut self) -> anyhow::Result<()> {
-        self.buffer.insert(self.y(), String::new());
+        self.buffer.insert(self.by(), String::new());
         Ok(())
     }
 
     fn remove_char(&mut self) -> anyhow::Result<()> {
-        let x = self.x();
-        let y = self.y();
+        let x = self.bx();
+        let y = self.by();
         if x > 0 {
             let line = self.buffer.get_mut(y).expect("line out of bounds");
             line.remove(x - 1);
@@ -778,6 +827,11 @@ impl Editor {
     fn handle_command(&mut self, cmd: &str) -> anyhow::Result<()> {
         if cmd == "q" {
             self.quit = true;
+            return Ok(());
+        }
+        if cmd == "$" {
+            self.move_to_buffer_bottom()?;
+            return Ok(());
         }
         Ok(())
     }
