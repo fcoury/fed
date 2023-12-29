@@ -5,6 +5,7 @@ use std::{
     time::Duration,
 };
 
+use command::new_command_editor;
 use crossterm::{
     cursor::{self, SetCursorStyle},
     event::{self, Event, KeyCode, KeyEvent},
@@ -14,11 +15,13 @@ use crossterm::{
 };
 use log::Logger;
 use once_cell::sync::OnceCell;
+use rustyline::{error::ReadlineError, Config, Editor as LineEditor};
 use theme::Theme;
 use utils::hex_to_crossterm_color;
 
 use crate::syntax::{highlight, Viewport};
 
+mod command;
 mod error;
 mod log;
 mod syntax;
@@ -42,6 +45,12 @@ enum Mode {
     #[default]
     Normal,
     Insert,
+    Command,
+}
+impl Mode {
+    fn is_command(&self) -> bool {
+        matches!(self, Mode::Command)
+    }
 }
 
 #[allow(unused)]
@@ -60,6 +69,8 @@ struct Editor {
     vwidth: usize,
     vheight: usize,
     waiting_key: Option<char>,
+    pending_redraw: bool,
+    quit: bool,
 }
 
 impl Editor {
@@ -95,10 +106,13 @@ impl Editor {
         })
     }
 
+    pub fn line_number(&self) -> usize {
+        self.vtop + self.cy + 1
+    }
+
     pub fn clear(&self) -> anyhow::Result<()> {
         stdout().queue(terminal::Clear(ClearType::All))?;
         stdout().queue(cursor::MoveTo(0, 0))?;
-        stdout().flush()?;
         Ok(())
     }
 
@@ -106,21 +120,58 @@ impl Editor {
         stdout().execute(EnterAlternateScreen)?;
         terminal::enable_raw_mode()?;
         self.clear()?;
-        self.draw()?;
+        self.draw(true)?;
 
         loop {
             if event::poll(Duration::from_millis(100))? {
                 let ev = event::read()?;
                 log!("Event: {:?}", ev);
-                if !self.handle_input(ev)? {
-                    break;
+                match self.handle_input(ev) {
+                    Ok(redraw) => {
+                        self.draw(redraw)?;
+                    }
+                    Err(err) => {
+                        log!("Error: {}", err);
+                        break;
+                    }
                 }
-                self.draw()?;
+            }
+
+            if self.quit {
+                break;
             }
         }
 
         terminal::disable_raw_mode()?;
         stdout().execute(LeaveAlternateScreen)?;
+        Ok(())
+    }
+
+    pub fn draw_editor(&mut self) -> anyhow::Result<()> {
+        self.draw_gutter()?;
+        self.draw_buffer()?;
+        self.draw_statusline()?;
+        self.draw_commandline()?;
+        Ok(())
+    }
+
+    pub fn draw(&mut self, redraw: bool) -> anyhow::Result<()> {
+        log!("draw");
+
+        if redraw || self.pending_redraw {
+            self.pending_redraw = false;
+            self.draw_editor()?;
+        }
+
+        if self.mode.is_command() {
+            self.handle_commandline();
+            self.draw_editor()?;
+        }
+
+        self.adjust_cursor();
+        self.draw_cursor();
+
+        stdout().flush()?;
         Ok(())
     }
 
@@ -163,21 +214,19 @@ impl Editor {
         stdout().queue(cursor::MoveTo(self.width as u16 - pos.len() as u16, y))?;
         stdout().queue(PrintStyledContent(pos.bold().with(pos_fg).on(pos_bg)))?;
 
-        stdout().flush()?;
         Ok(())
     }
 
-    pub fn draw(&mut self) -> anyhow::Result<()> {
-        log!("draw");
+    pub fn draw_commandline(&mut self) -> anyhow::Result<()> {
+        // let fg = hex_to_crossterm_color(&self.theme.foreground)?;
+        let bg = hex_to_crossterm_color(&self.theme.background)?;
 
-        self.draw_gutter()?;
-        self.draw_buffer()?;
-        self.draw_statusline()?;
-
-        self.adjust_cursor();
-        self.draw_cursor()?;
-
-        stdout().flush()?;
+        let y = self.height as u16 - 1;
+        let line = " ".repeat(self.width);
+        stdout().queue(cursor::MoveTo(0, y))?;
+        stdout().queue(PrintStyledContent(line.on(bg)))?;
+        // stdout().queue(cursor::MoveTo(0, y))?;
+        // stdout().queue(PrintStyledContent(":".with(fg).on(bg)))?;
         Ok(())
     }
 
@@ -206,12 +255,13 @@ impl Editor {
 
         let width = self.vleft - 3;
         for y in 0..self.vheight {
-            let line_number = format!("{:>width$} │ ", y + self.vtop + 1);
+            let color = if y == self.cy { fgh } else { fg };
+            let line_number = format!("{:>width$}", y + self.vtop + 1);
             stdout().queue(cursor::MoveTo(0, y as u16))?;
-            stdout().queue(PrintStyledContent(line_number.with(fg).on(bg)))?;
+            stdout().queue(PrintStyledContent(line_number.with(color).on(bg)))?;
+            stdout().queue(PrintStyledContent(" ┃ ".to_string().with(fg).on(bg)))?;
         }
 
-        stdout().flush()?;
         Ok(())
     }
 
@@ -226,13 +276,20 @@ impl Editor {
         let viewport = Viewport::new(self.vtop, self.vleft, self.vwidth, self.vheight);
         highlight(&self.buffer, &self.theme, &viewport)?;
 
-        stdout().flush()?;
         Ok(())
     }
 
     pub fn adjust_cursor(&mut self) {
+        if !self.affects_buffer() {
+            return;
+        }
+
         if self.y() >= self.buffer.len() {
             self.cy = self.buffer.len() - 1;
+        }
+
+        if self.cx < 0 {
+            self.cx = 0;
         }
 
         let max_x = self.line().len();
@@ -249,27 +306,35 @@ impl Editor {
             match self.mode {
                 Mode::Normal => self.cx = if max_x > 0 { max_x - 1 } else { 0 },
                 Mode::Insert => self.cx = max_x,
+                Mode::Command => {}
             }
         }
     }
 
     pub fn draw_cursor(&mut self) -> anyhow::Result<()> {
+        if !self.affects_buffer() {
+            return Ok(());
+        }
+
         log!("draw_cursor cx={} cy={}", self.cx, self.cy);
         match self.mode {
-            Mode::Normal => stdout().queue(SetCursorStyle::SteadyBlock)?,
-            Mode::Insert => stdout().queue(SetCursorStyle::SteadyBar)?,
-        };
+            Mode::Normal => {
+                stdout().queue(SetCursorStyle::SteadyBlock)?;
+            }
+            Mode::Insert => {
+                stdout().queue(SetCursorStyle::SteadyBar)?;
+            }
+            Mode::Command => {}
+        }
 
-        stdout()
-            .queue(cursor::MoveTo(
-                (self.vleft + self.cx).try_into()?,
-                self.cy.try_into()?,
-            ))?
-            .flush()?;
+        stdout().queue(cursor::MoveTo(
+            (self.vleft + self.cx).try_into()?,
+            self.cy.try_into()?,
+        ))?;
         Ok(())
     }
 
-    fn move_down(&mut self) -> anyhow::Result<()> {
+    fn move_down(&mut self) -> anyhow::Result<bool> {
         log!(
             "move_down: cx: {}, cy: {}, vleft: {}, vtop: {}",
             self.cx,
@@ -277,12 +342,14 @@ impl Editor {
             self.vleft,
             self.vtop
         );
+        let mut redraw = false;
         if self.y() < self.vheight - 1 {
             if self.y() < self.buffer.len() {
                 self.cy += 1;
             }
         } else {
             self.vtop += 1;
+            redraw = true;
         }
         log!(
             "move_down: cx: {}, cy: {}, vleft: {}, vtop: {}, vwidth: {}, vheight: {}",
@@ -293,10 +360,10 @@ impl Editor {
             self.vwidth,
             self.vheight,
         );
-        Ok(())
+        Ok(redraw)
     }
 
-    fn move_up(&mut self) -> anyhow::Result<()> {
+    fn move_up(&mut self) -> anyhow::Result<bool> {
         // if we are inside the viewport
         if self.cy > self.vtop {
             self.cy -= 1;
@@ -305,12 +372,15 @@ impl Editor {
             if self.vtop > 0 {
                 self.vtop -= 1;
             }
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
-    fn move_right(&mut self) -> anyhow::Result<()> {
+    fn move_right(&mut self) -> anyhow::Result<bool> {
         log!("move_right");
+
+        let mut redraw = false;
 
         // if we're inside the viewport
         if self.cx < self.vwidth - 1 {
@@ -322,6 +392,7 @@ impl Editor {
             if self.vleft < self.line().len() - 1 {
                 self.vleft += 1;
                 self.cx += 1;
+                redraw = true;
             }
         }
         log!(
@@ -331,30 +402,25 @@ impl Editor {
             self.vleft,
             self.vtop
         );
-        Ok(())
+        Ok(redraw)
     }
 
-    fn move_left(&mut self) -> anyhow::Result<()> {
+    fn move_left(&mut self) -> anyhow::Result<bool> {
         // if we're inside the viewport
-        if self.cx > self.vleft {
+        if self.cx > 0 {
             self.cx -= 1;
-        } else {
-            // if we're at the left edge of the viewport
-            if self.vleft > 0 {
-                self.vleft -= 1;
-            }
         }
-        Ok(())
+        Ok(false)
     }
 
-    fn move_end_of_line(&mut self) -> anyhow::Result<()> {
+    fn move_end_of_line(&mut self) -> anyhow::Result<bool> {
         self.cx = self.line().len() - 1;
-        Ok(())
+        Ok(false)
     }
 
-    fn move_start_of_line(&mut self) -> anyhow::Result<()> {
+    fn move_start_of_line(&mut self) -> anyhow::Result<bool> {
         self.cx = 0;
-        Ok(())
+        Ok(false)
     }
 
     fn x(&self) -> usize {
@@ -374,6 +440,7 @@ impl Editor {
         match self.mode {
             Mode::Normal => self.handle_normal_input(ev),
             Mode::Insert => self.handle_insert_input(ev),
+            Mode::Command => Ok(true),
         }
     }
 
@@ -389,7 +456,7 @@ impl Editor {
                 self.height = *height as usize;
                 self.vwidth = *width as usize - self.vleft;
                 self.vheight = *height as usize - 1;
-                self.draw()?;
+                self.draw(true)?;
                 return Ok(true);
             }
             _ => {}
@@ -398,8 +465,15 @@ impl Editor {
         Ok(false)
     }
 
+    /// Handles normal mode input. Returns true if a redraw is needed.
+    ///
+    /// # Errors
+    ///
+    /// This function will return an error if there is an error on the underlying
+    /// command execution.
     fn handle_normal_input(&mut self, ev: Event) -> anyhow::Result<bool> {
         log!("handle_normal_input ev: {:?}", ev);
+        let mut redraw = false;
         match ev {
             Event::Key(KeyEvent {
                 code: key,
@@ -410,6 +484,7 @@ impl Editor {
                     'f' => {
                         if mods.contains(event::KeyModifiers::CONTROL) {
                             self.move_to_next_page()?;
+                            redraw = true;
                         }
                     }
                     'b' => {
@@ -418,6 +493,7 @@ impl Editor {
                         } else {
                             self.move_to_previous_word();
                         }
+                        redraw = true;
                     }
                     'q' => return Ok(false),
                     'i' => {
@@ -427,14 +503,19 @@ impl Editor {
                         self.move_right()?;
                         self.mode = Mode::Insert;
                     }
+                    ':' | ';' => {
+                        self.mode = Mode::Command;
+                    }
                     'o' => {
                         self.move_down()?;
                         self.insert_line()?;
                         self.mode = Mode::Insert;
+                        redraw = true;
                     }
                     'O' => {
                         self.insert_line()?;
                         self.mode = Mode::Insert;
+                        redraw = true;
                     }
                     'x' => {
                         let x = self.x();
@@ -444,11 +525,13 @@ impl Editor {
                             let line = self.buffer.get_mut(y).expect("line out of bounds");
                             line.remove(x);
                         }
+                        redraw = true;
                     }
                     'd' => match self.waiting_key {
                         Some('d') => {
                             self.buffer.remove(self.y());
                             self.waiting_key = None;
+                            redraw = true;
                         }
                         _ => {
                             self.waiting_key = Some('d');
@@ -462,27 +545,28 @@ impl Editor {
                         let y = self.y();
                         self.buffer[y] = new_line;
                         self.buffer.remove(self.y() + 1);
+                        redraw = true;
                     }
                     'j' => {
-                        self.move_down()?;
+                        redraw = self.move_down()?;
                     }
                     'k' => {
-                        self.move_up()?;
+                        redraw = self.move_up()?;
                     }
                     'h' => {
-                        self.move_left()?;
+                        redraw = self.move_left()?;
                     }
                     'l' => {
-                        self.move_right()?;
+                        redraw = self.move_right()?;
                     }
                     '$' => {
-                        self.move_end_of_line()?;
+                        redraw = self.move_end_of_line()?;
                     }
                     '0' => {
-                        self.move_start_of_line()?;
+                        redraw = self.move_start_of_line()?;
                     }
                     'w' => {
-                        self.move_to_next_word();
+                        redraw = self.move_to_next_word()?;
                     }
                     _ => {}
                 },
@@ -507,7 +591,7 @@ impl Editor {
             _ => {}
         }
 
-        Ok(true)
+        Ok(redraw)
     }
 
     fn move_to_next_page(&mut self) -> anyhow::Result<()> {
@@ -522,7 +606,7 @@ impl Editor {
         Ok(())
     }
 
-    fn move_to_next_word(&mut self) {
+    fn move_to_next_word(&mut self) -> anyhow::Result<bool> {
         let nx = self
             .line()
             .chars()
@@ -536,6 +620,7 @@ impl Editor {
                 self.cx = self.line().len() - 1;
             }
         }
+        Ok(false)
     }
 
     fn move_to_previous_word(&mut self) {
@@ -637,6 +722,42 @@ impl Editor {
         if x > 0 {
             let line = self.buffer.get_mut(y).expect("line out of bounds");
             line.remove(x - 1);
+        }
+        Ok(())
+    }
+
+    fn affects_buffer(&self) -> bool {
+        matches!(self.mode, Mode::Normal | Mode::Insert)
+    }
+
+    fn handle_commandline(&mut self) -> anyhow::Result<()> {
+        let mut rl = new_command_editor()?;
+        stdout().execute(cursor::MoveTo(0, self.height as u16 - 1))?;
+        match rl.readline(":") {
+            Ok(line) => {
+                rl.add_history_entry(line.as_str())?;
+                log!("Command: {}", line);
+                self.handle_command(&line)?;
+            }
+            Err(ReadlineError::Interrupted) => {
+                log!("CTRL-C");
+            }
+            Err(ReadlineError::Eof) => {
+                log!("CTRL-D");
+            }
+            Err(err) => {
+                log!("Error: {:?}", err);
+            }
+        }
+
+        self.mode = Mode::Normal;
+        self.pending_redraw = true;
+        Ok(())
+    }
+
+    fn handle_command(&mut self, cmd: &str) -> anyhow::Result<()> {
+        if cmd == "q" {
+            self.quit = true;
         }
         Ok(())
     }
