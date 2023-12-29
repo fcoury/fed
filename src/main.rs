@@ -15,9 +15,9 @@ use crossterm::{
 };
 use log::Logger;
 use once_cell::sync::OnceCell;
-use rustyline::{error::ReadlineError, Config, Editor as LineEditor};
+use rustyline::error::ReadlineError;
 use theme::Theme;
-use utils::hex_to_crossterm_color;
+use utils::{darken, hex_to_crossterm_color};
 
 use crate::syntax::{highlight, Viewport};
 
@@ -47,16 +47,23 @@ enum Mode {
     Insert,
     Command,
 }
+
 impl Mode {
     fn is_command(&self) -> bool {
         matches!(self, Mode::Command)
     }
 }
 
+#[derive(Default)]
+struct Config {
+    use_faded_line_numbers: bool,
+}
+
 #[allow(unused)]
 #[derive(Default)]
 struct Editor {
     theme: Theme,
+    config: Config,
     mode: Mode,
     buffer: Vec<String>,
     name: String,
@@ -89,6 +96,11 @@ impl Editor {
 
         let vleft = 8;
 
+        // TODO: read from disk
+        let config = Config {
+            use_faded_line_numbers: true,
+        };
+
         Ok(Self {
             mode: Mode::Normal,
             theme,
@@ -102,6 +114,7 @@ impl Editor {
             vtop: 0,
             vwidth: width as usize - vleft,
             vheight: height as usize - 2,
+            config,
             ..Default::default()
         })
     }
@@ -199,6 +212,7 @@ impl Editor {
         };
         stdout().queue(cursor::MoveTo(0, y))?;
         stdout().queue(PrintStyledContent(mode.bold().with(mode_fg).on(mode_bg)))?;
+        stdout().queue(PrintStyledContent("".with(mode_bg).on(bar_bg)))?;
 
         // filename
         let name_fg = Color::White;
@@ -211,7 +225,8 @@ impl Editor {
             g: 145,
             b: 236,
         };
-        stdout().queue(cursor::MoveTo(self.width as u16 - pos.len() as u16, y))?;
+        stdout().queue(cursor::MoveTo(self.width as u16 - pos.len() as u16 - 1, y))?;
+        stdout().queue(PrintStyledContent("".with(pos_bg).on(bar_bg)))?;
         stdout().queue(PrintStyledContent(pos.bold().with(pos_fg).on(pos_bg)))?;
 
         Ok(())
@@ -253,13 +268,18 @@ impl Editor {
                 .unwrap_or(self.theme.background.clone()),
         )?;
 
-        let width = self.vleft - 3;
+        let width = self.vleft - 2;
         for y in 0..self.vheight {
+            let fg = if self.config.use_faded_line_numbers {
+                darken(fg, 0.5)?
+            } else {
+                fg
+            };
             let color = if y == self.cy { fgh } else { fg };
             let line_number = format!("{:>width$}", y + self.vtop + 1);
             stdout().queue(cursor::MoveTo(0, y as u16))?;
             stdout().queue(PrintStyledContent(line_number.with(color).on(bg)))?;
-            stdout().queue(PrintStyledContent(" ┃ ".to_string().with(fg).on(bg)))?;
+            stdout().queue(PrintStyledContent(" ▎".to_string().with(fg).on(bg)))?;
         }
 
         Ok(())
