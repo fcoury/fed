@@ -1,9 +1,9 @@
 use std::path::Path;
 
+use crossterm::style;
 use plist::{Dictionary, Value};
-use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::error::ThemeParseError;
+use crate::{error::ThemeParseError, utils::hex_to_crossterm_color};
 
 #[derive(Debug, Clone, Default)]
 pub struct Theme {
@@ -13,9 +13,13 @@ pub struct Theme {
     pub caret: String,
     pub foreground: String,
     pub invisibles: String,
-    pub line_highlight: String,
-    pub selection: String,
     pub settings: Vec<ThemeSetting>,
+    pub gutter_foreground: Option<String>,
+    pub gutter_background: Option<String>,
+    pub gutter_foreground_highlight: Option<String>,
+    pub gutter_background_highlight: Option<String>,
+    pub line_highlight: Option<String>,
+    pub selection: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -41,9 +45,37 @@ pub enum FontStyle {
 }
 
 impl Theme {
+    pub fn default_colors(&self) -> (style::Color, style::Color) {
+        (
+            hex_to_crossterm_color(&self.background).unwrap(),
+            hex_to_crossterm_color(&self.foreground).unwrap(),
+        )
+    }
+
     pub fn get_scope(&self, scope: &str) -> Option<&ThemeSetting> {
         let scope = scope.to_string();
         self.settings.iter().find(|s| s.scopes.contains(&scope))
+    }
+
+    pub fn scope_color(&self, scope: &str) -> (style::Color, style::Color) {
+        let Some(setting) = self.get_scope(scope) else {
+            return self.default_colors();
+        };
+
+        let background = setting
+            .settings
+            .background
+            .as_ref()
+            .map(|s| hex_to_crossterm_color(s).unwrap())
+            .unwrap_or_else(|| hex_to_crossterm_color(&self.background).unwrap());
+        let foreground = setting
+            .settings
+            .foreground
+            .as_ref()
+            .map(|s| hex_to_crossterm_color(s).unwrap())
+            .unwrap_or_else(|| hex_to_crossterm_color(&self.foreground).unwrap());
+
+        (background, foreground)
     }
 
     pub fn parse<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
@@ -100,8 +132,16 @@ impl Theme {
         let caret = get_mandatory_setting(&main, "caret")?;
         let foreground = get_mandatory_setting(&main, "foreground")?;
         let invisibles = get_mandatory_setting(&main, "invisibles")?;
-        let line_highlight = get_mandatory_setting(&main, "lineHighlight")?;
-        let selection = get_mandatory_setting(&main, "selection")?;
+
+        // gutter settings
+        let gutter_foreground = get_setting(&main, "gutterForeground");
+        let gutter_background = get_setting(&main, "gutterBackground");
+        let gutter_foregound_highlight = get_setting(&main, "gutterForegroundHighlight");
+        let gutter_background_highlight = get_setting(&main, "gutterBackgroundHighlight");
+        let line_highlight = get_setting(&main, "lineHighlight");
+        let selection = get_setting(&main, "selection");
+
+        // TODO: add other optional settings
 
         let settings = settings
             .iter()
@@ -153,6 +193,10 @@ impl Theme {
             invisibles,
             line_highlight,
             selection,
+            gutter_foreground,
+            gutter_background,
+            gutter_foreground_highlight: gutter_foregound_highlight,
+            gutter_background_highlight,
             settings,
         })
     }

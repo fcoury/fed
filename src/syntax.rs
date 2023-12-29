@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use strum_macros::{Display, EnumString};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::{log, theme::Theme};
+use crate::{log, theme::Theme, utils::hex_to_crossterm_color};
 
 const HIGHLIGHT_NAMES: [&str; 52] = [
     "attribute",
@@ -307,16 +307,6 @@ pub fn rust_parser() -> HighlightConfiguration {
     rust_config
 }
 
-fn hex_to_crossterm_color(hex: &str) -> Result<style::Color, ParseIntError> {
-    let hex = hex.trim_start_matches('#');
-
-    let r = u8::from_str_radix(&hex[0..2], 16)?;
-    let g = u8::from_str_radix(&hex[2..4], 16)?;
-    let b = u8::from_str_radix(&hex[4..6], 16)?;
-
-    Ok(style::Color::Rgb { r, g, b })
-}
-
 fn split_chunks(chunks: Vec<Chunk>) -> Vec<Vec<Chunk>> {
     let mut lines: Vec<Vec<Chunk>> = vec![];
     let mut current_line: Vec<Chunk> = vec![];
@@ -353,9 +343,9 @@ fn clear_line(theme: &Theme, viewport: &Viewport) -> anyhow::Result<()> {
     stdout().queue(style::SetForegroundColor(fg))?;
     stdout().queue(style::SetBackgroundColor(bg))?;
 
-    stdout().queue(cursor::MoveToColumn(0))?;
+    stdout().queue(cursor::MoveToColumn(viewport.left as u16))?;
     stdout().queue(style::Print(" ".repeat(viewport.width)))?;
-    stdout().queue(cursor::MoveToColumn(0))?;
+    stdout().queue(cursor::MoveToColumn(viewport.left as u16))?;
 
     Ok(())
 }
@@ -368,7 +358,7 @@ pub fn highlight(buffer: &[String], theme: &Theme, viewport: &Viewport) -> anyho
     log!("{:?}", viewport);
     let lines = viewport.clamp_lines(&chunks)?;
 
-    stdout().queue(cursor::MoveTo(0, 0))?;
+    stdout().queue(cursor::MoveTo(viewport.left as u16, 0))?;
 
     for line in lines {
         clear_line(theme, viewport)?;

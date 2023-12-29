@@ -15,6 +15,7 @@ use crossterm::{
 use log::Logger;
 use once_cell::sync::OnceCell;
 use theme::Theme;
+use utils::hex_to_crossterm_color;
 
 use crate::syntax::{highlight, Viewport};
 
@@ -22,6 +23,7 @@ mod error;
 mod log;
 mod syntax;
 mod theme;
+mod utils;
 
 static LOGGER: OnceCell<Logger> = OnceCell::new();
 
@@ -74,6 +76,8 @@ impl Editor {
             None => (vec![String::new()], "No Name".to_string()),
         };
 
+        let vleft = 8;
+
         Ok(Self {
             mode: Mode::Normal,
             theme,
@@ -83,9 +87,9 @@ impl Editor {
             height: height as usize,
             cx: 0, // cursor x position on the viewport
             cy: 0, // cursor y position on the viewport
-            vleft: 0,
+            vleft,
             vtop: 0,
-            vwidth: width as usize,
+            vwidth: width as usize - vleft,
             vheight: height as usize - 2,
             ..Default::default()
         })
@@ -162,6 +166,7 @@ impl Editor {
     pub fn draw(&mut self) -> anyhow::Result<()> {
         log!("draw");
 
+        self.draw_gutter()?;
         self.draw_buffer()?;
         self.draw_statusline()?;
 
@@ -172,8 +177,47 @@ impl Editor {
         Ok(())
     }
 
+    pub fn draw_gutter(&mut self) -> anyhow::Result<()> {
+        let fg = hex_to_crossterm_color(
+            &self
+                .theme
+                .gutter_foreground
+                .clone()
+                .unwrap_or(self.theme.foreground.clone()),
+        )?;
+        let fgh = hex_to_crossterm_color(
+            &self
+                .theme
+                .gutter_foreground_highlight
+                .clone()
+                .unwrap_or(self.theme.foreground.clone()),
+        )?;
+        let bg = hex_to_crossterm_color(
+            &self
+                .theme
+                .gutter_background
+                .clone()
+                .unwrap_or(self.theme.background.clone()),
+        )?;
+
+        let width = self.vleft - 3;
+        for y in 0..self.vheight {
+            let line_number = format!("{:>width$} │ ", y + self.vtop);
+            stdout().queue(cursor::MoveTo(0, y as u16))?;
+            stdout().queue(PrintStyledContent(line_number.with(fg).on(bg)))?;
+        }
+
+        stdout().flush()?;
+        Ok(())
+    }
+
     pub fn draw_buffer(&mut self) -> anyhow::Result<()> {
-        log!("draw_buffer");
+        log!(
+            "draw_buffer left={} width={} total={}",
+            self.vleft,
+            self.vwidth,
+            self.width
+        );
 
         let viewport = Viewport::new(self.vtop, self.vleft, self.vwidth, self.vheight);
         highlight(&self.buffer, &self.theme, &viewport)?;
@@ -206,14 +250,17 @@ impl Editor {
     }
 
     pub fn draw_cursor(&mut self) -> anyhow::Result<()> {
-        log!("draw_cursor");
+        log!("draw_cursor cx={} cy={}", self.cx, self.cy);
         match self.mode {
             Mode::Normal => stdout().queue(SetCursorStyle::SteadyBlock)?,
             Mode::Insert => stdout().queue(SetCursorStyle::SteadyBar)?,
         };
 
         stdout()
-            .queue(cursor::MoveTo(self.cx.try_into()?, self.cy.try_into()?))?
+            .queue(cursor::MoveTo(
+                (self.vleft + self.cx).try_into()?,
+                self.cy.try_into()?,
+            ))?
             .flush()?;
         Ok(())
     }
@@ -336,7 +383,7 @@ impl Editor {
                 log!("resize: {}x{}", width, height);
                 self.width = *width as usize;
                 self.height = *height as usize;
-                self.vwidth = *width as usize;
+                self.vwidth = *width as usize - self.vleft;
                 self.vheight = *height as usize - 1;
                 self.draw()?;
                 return Ok(true);
