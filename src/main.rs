@@ -206,7 +206,7 @@ impl Editor {
 
         let width = self.vleft - 3;
         for y in 0..self.vheight {
-            let line_number = format!("{:>width$} │ ", y + self.vtop);
+            let line_number = format!("{:>width$} │ ", y + self.vtop + 1);
             stdout().queue(cursor::MoveTo(0, y as u16))?;
             stdout().queue(PrintStyledContent(line_number.with(fg).on(bg)))?;
         }
