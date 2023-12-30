@@ -65,9 +65,20 @@ impl Mode {
     }
 }
 
-#[derive(Default)]
 struct Config {
-    use_faded_line_numbers: bool,
+    faded_line_numbers: bool,
+    tab_size: u8,
+    tab_to_spaces: bool,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            faded_line_numbers: true,
+            tab_size: 4,
+            tab_to_spaces: true,
+        }
+    }
 }
 
 #[allow(unused)]
@@ -108,9 +119,7 @@ impl Editor {
         let vleft = 8;
 
         // TODO: read from disk
-        let config = Config {
-            use_faded_line_numbers: true,
-        };
+        let config = Config::default();
 
         Ok(Self {
             mode: Mode::Normal,
@@ -276,7 +285,7 @@ impl Editor {
 
         let width = self.vleft - 2;
         for y in 0..self.vheight {
-            let fg = if self.config.use_faded_line_numbers {
+            let fg = if self.config.faded_line_numbers {
                 darken(fg, 0.5)?
             } else {
                 fg
@@ -756,6 +765,12 @@ impl Editor {
                 }
                 KeyCode::Enter => {
                     self.split_line_at_cursor()?;
+                }
+                KeyCode::Tab => {
+                    for _ in 0..self.config.tab_size {
+                        self.insert_char(' ')?;
+                        self.move_right()?;
+                    }
                 }
                 _ => {}
             },
