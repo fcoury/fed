@@ -6,7 +6,7 @@ use std::{
 
 use command::get_command;
 use crossterm::{
-    cursor::{self, SetCursorStyle},
+    cursor::{self, position, SetCursorStyle},
     event::{self, Event, KeyCode, KeyEvent},
     style::{Color, PrintStyledContent, Stylize},
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
@@ -277,10 +277,18 @@ impl Editor {
                 fg
             };
             let color = if y == self.cy { fgh } else { fg };
-            let line_number = format!("{:>width$}", y + self.vtop + 1);
             stdout().queue(cursor::MoveTo(0, y as u16))?;
-            stdout().queue(PrintStyledContent(line_number.with(color).on(bg)))?;
-            stdout().queue(PrintStyledContent(" ▎".to_string().with(fg).on(bg)))?;
+            if self.vtop + y >= self.buffer.len() {
+                log!("draw_gutter: empty line");
+                stdout().queue(PrintStyledContent(
+                    " ".repeat(self.vleft).with(color).on(bg),
+                ))?;
+            } else {
+                log!("draw_gutter: line {}", y + self.vtop + 1);
+                let line_number = format!("{:>width$}", y + self.vtop + 1);
+                stdout().queue(PrintStyledContent(line_number.with(color).on(bg)))?;
+                stdout().queue(PrintStyledContent(" ▎".to_string().with(fg).on(bg)))?;
+            }
         }
 
         Ok(())
@@ -296,6 +304,12 @@ impl Editor {
 
         let viewport = Viewport::new(self.vtop, self.vleft, self.vwidth, self.vheight);
         highlight(&self.buffer, &self.theme, &viewport)?;
+
+        let (fg, bg) = self.theme.default_colors();
+        for y in position()?.1..self.vheight as u16 {
+            stdout().queue(cursor::MoveTo(self.vleft as u16, y))?;
+            stdout().queue(PrintStyledContent(" ".repeat(self.vwidth).with(fg).on(bg)))?;
+        }
 
         Ok(())
     }
@@ -819,7 +833,7 @@ impl Editor {
             } else if let Ok(line) = cmd.parse::<usize>() {
                 if line == 0 {
                     self.move_to_start_of_buffer();
-                } else if line < self.buffer.len() {
+                } else if line <= self.buffer.len() {
                     self.move_to_line(line - 1);
                 }
             }
