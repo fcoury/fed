@@ -183,7 +183,7 @@ impl Editor {
         self.draw_gutter()?;
 
         if self.mode.is_command() {
-            self.handle_commandline()?;
+            self.handle_command()?;
         }
 
         self.draw_cursor()?;
@@ -809,7 +809,7 @@ impl Editor {
         matches!(self.mode, Mode::Normal | Mode::Insert)
     }
 
-    fn handle_commandline(&mut self) -> anyhow::Result<()> {
+    fn handle_command(&mut self) -> anyhow::Result<()> {
         if let Some(cmd) = get_command(&self)? {
             log!("command: {}", cmd);
             if cmd == "q" {

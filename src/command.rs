@@ -11,13 +11,10 @@ use crate::Editor;
 
 pub fn get_command(e: &Editor) -> anyhow::Result<Option<String>> {
     let (fg, bg) = e.theme.default_colors();
-    let width = e.width;
-
     let mut command = String::new();
 
     loop {
-        stdout().queue(MoveTo(0, e.command_y() as u16))?;
-        stdout().queue(PrintStyledContent(" ".repeat(width).with(fg).on(bg)))?;
+        clear_commandline(&e)?;
         stdout().queue(MoveTo(0, e.command_y() as u16))?;
         stdout().queue(PrintStyledContent(format!(":{command}").with(fg).on(bg)))?;
         stdout().flush()?;
@@ -38,5 +35,16 @@ pub fn get_command(e: &Editor) -> anyhow::Result<Option<String>> {
         }
     }
 
+    clear_commandline(&e)?;
     Ok(Some(command))
+}
+
+pub fn clear_commandline(e: &Editor) -> anyhow::Result<()> {
+    let (fg, bg) = e.theme.default_colors();
+    let width = e.width;
+
+    stdout().queue(MoveTo(0, e.command_y() as u16))?;
+    stdout().queue(PrintStyledContent(" ".repeat(width).with(fg).on(bg)))?;
+
+    Ok(())
 }
