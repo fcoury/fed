@@ -6,6 +6,39 @@
 
 ![Fed Screenshot](assets/screenshot.png)
 
+## Roadmap
+
+- ✅ Normal mode
+  - ✅ Basic movements (h, j, k, l)
+  - 🚧 Word movements (w, b)
+  - 🚧 Page movements (C-f, C-b)
+  - ✅ Line insertions (o, O)
+  - ⏳ Replacements (c, r)
+  - 🚧 Deletions (x, d)
+    - ✅ Unary x deletion
+    - ⏳ Combo x deletion (10x)
+    - ✅ Line deletion (dd)
+    - ⏳ Combo line deletion (d10d)
+    - ⏳ Combo line deletion (dw, etc.)
+  - ⏳ Undo and redo
+- ✅ Insert mode
+- 🚧 Command mode
+  - ✅ `quit` command
+  - ✅ `0` and `$`
+- ⏳ Visual mode
+- 🚧 Mouse support
+- 🚧 Status line
+- 🚧 Syntax highlighting
+  - ✅ Javascript
+  - ✅ Rust
+- 🚧 Theming
+  - 🚧 TextMate (tmTheme) themes
+  - 🚧 Visual Studio themes
+
+⏳ = Not Started
+🚧 = Started
+✅ = Done
+
 ## Features
 
 - **Modal Editing**: Like Neovim, Fed supports modal editing, separating text entry from command execution.
