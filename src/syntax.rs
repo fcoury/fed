@@ -1,4 +1,4 @@
-use std::{cmp, collections::HashMap, io::stdout, num::ParseIntError, str::FromStr};
+use std::{cmp, collections::HashMap, io::stdout, str::FromStr};
 
 use crossterm::{
     cursor,
