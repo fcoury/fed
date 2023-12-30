@@ -510,7 +510,7 @@ impl Editor {
                 KeyCode::Char(c) => match c {
                     'f' => {
                         if mods.contains(event::KeyModifiers::CONTROL) {
-                            self.move_to_next_page()?;
+                            self.move_to_next_page();
                             redraw = true;
                         }
                     }
@@ -627,22 +627,12 @@ impl Editor {
         Ok(redraw)
     }
 
-    fn move_to_next_page(&mut self) -> anyhow::Result<()> {
-        let desired_vtop = self.vtop + self.vheight;
-        log!(
-            "desired_vtop: {} buffer_len: {}",
-            desired_vtop,
-            self.buffer.len()
-        );
-        if desired_vtop < self.buffer.len() - 1 {
-            // if there's room for a new page, moves to it
+    fn move_to_next_page(&mut self) {
+        if self.buffer.len() > self.vtop + self.vheight {
             self.vtop += self.vheight;
         } else {
-            // otherwise, move to the last line of the current viewport
-            self.cy += self.vheight - 1;
+            self.vtop = self.buffer.len() - self.vheight;
         }
-
-        Ok(())
     }
 
     fn move_to_start_of_line(&mut self) {
