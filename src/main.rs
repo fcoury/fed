@@ -887,7 +887,11 @@ fn main() {
         .nth(2)
         .unwrap_or("src/fixtures/GitHub.tmTheme".to_string());
     log!("theme: {}", theme);
-    let theme = Theme::parse(theme).unwrap();
+    let theme = if theme.ends_with(".tmTheme") {
+        Theme::parse(theme).unwrap()
+    } else {
+        Theme::parse_vscode(theme).unwrap()
+    };
     log!("theme: {:#?}", theme);
 
     let mut editor = match Editor::new(theme, file) {

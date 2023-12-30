@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashMap, path::Path};
 
 use crossterm::style;
 use plist::{Dictionary, Value};
@@ -10,9 +10,9 @@ pub struct Theme {
     pub name: String,
     pub author: Option<String>,
     pub background: String,
-    pub caret: String,
     pub foreground: String,
-    pub invisibles: String,
+    pub caret: Option<String>,
+    pub invisibles: Option<String>,
     pub settings: Vec<ThemeSetting>,
     pub gutter_foreground: Option<String>,
     pub gutter_background: Option<String>,
@@ -78,6 +78,195 @@ impl Theme {
         (background, foreground)
     }
 
+    pub fn parse_vscode<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let mappings = [
+            ("attribute", "entity.other.attribute-name"),
+            ("boolean", "constant.language"),
+            //("carriage-return", "None"), // No direct mapping
+            ("comment", "comment"),
+            ("comment.documentation", "comment.block.documentation"),
+            ("constant", "variable.other.constant"),
+            ("constant.builtin", "*.defaultLibrary"),
+            ("constructor", "variable.function.constructor"),
+            //("constructor.builtin", "None"), // No direct mapping
+            ("embedded", "punctuation.section.embedded"),
+            ("error", "invalid"),
+            ("escape", "constant.character.escape"),
+            ("function", "entity.name.function"),
+            ("function.builtin", "support.function"),
+            ("keyword", "keyword"),
+            ("markup", "markup"),
+            ("markup.bold", "markup.bold"),
+            ("markup.heading", "heading.1.markdown"),
+            ("markup.italic", "markup.italic"),
+            ("markup.link", "markup.underline.link"),
+            //("markup.link.url", "None"), // No direct mapping
+            //("markup.list", "None"), // No direct mapping
+            //("markup.list.checked", "None"), // No direct mapping
+            //("markup.list.numbered", "None"), // No direct mapping
+            //("markup.list.unchecked", "None"), // No direct mapping
+            //("markup.list.unnumbered", "None"), // No direct mapping
+            ("markup.quote", "markup.quote"),
+            ("markup.raw", "markup.inline.raw"), // Closest match
+            //("markup.raw.block", "None"), // No direct mapping
+            //("markup.raw.inline", "None"), // No direct mapping
+            //("markup.strikethrough", "None"), // No direct mapping
+            ("module", "entity.name.tag"), // Interpretive mapping
+            ("number", "constant.numeric"),
+            ("operator", "keyword.operator"),
+            ("property", "variable.other.property"),
+            ("property.builtin", "property.defaultLibrary"),
+            ("punctuation", "punctuation"),
+            //("punctuation.bracket", "None"), // No direct mapping
+            //("punctuation.delimiter", "None"), // No direct mapping
+            //("punctuation.special", "None"), // No direct mapping
+            ("string", "string"),
+            ("string.escape", "constant.character.escape"),
+            ("string.regexp", "string.regexp"),
+            //("string.special", "None"), // No direct mapping
+            ("string.special.symbol", "constant.other.symbol"),
+            ("tag", "entity.name.tag"),
+            ("type", "support.type"),
+            ("type.builtin", "support.type.sys-types"),
+            ("variable", "variable"),
+            ("variable.builtin", "variable.defaultLibrary"),
+            ("variable.member", "variable.other.member"),
+            ("variable.parameter", "variable.parameter"),
+        ];
+
+        let contents = std::fs::read_to_string(&path)?;
+        let theme = serde_jsonrc::from_str::<serde_jsonrc::Value>(&contents)?;
+        let Some(theme) = theme.as_object() else {
+            // TODO: use a invalid field error instead
+            return Err(ThemeParseError::MissingField("theme".to_string()).into());
+        };
+        let Some(semantic_token_colors) = theme["semanticTokenColors"].as_object() else {
+            return Err(ThemeParseError::MissingField("semanticTokenColors".to_string()).into());
+        };
+        let Some(token_colors) = theme["tokenColors"].as_array() else {
+            return Err(ThemeParseError::MissingField("tokenColors".to_string()).into());
+        };
+
+        let mut scopes = HashMap::new();
+
+        for (key, value) in semantic_token_colors.iter() {
+            let Some(value) = value.as_object() else {
+                continue;
+            };
+            scopes.insert(key.clone(), value);
+        }
+
+        token_colors
+            .iter()
+            .filter_map(|color| {
+                color.as_object().and_then(|info| {
+                    info["settings"].as_object().and_then(|settings| {
+                        info["scope"].as_array().map(|scope| {
+                            scope
+                                .iter()
+                                .filter_map(|s| {
+                                    s.as_str().map(|s| {
+                                        s.split(',')
+                                            .map(|s| s.trim().to_string())
+                                            .collect::<Vec<_>>()
+                                    })
+                                })
+                                .flatten()
+                                .for_each(|scope| {
+                                    scopes.insert(scope, settings);
+                                })
+                        })
+                    })
+                })
+            })
+            .for_each(drop);
+
+        println!("{:#?}", scopes);
+
+        let mut settings = Vec::new();
+        for (from, to) in mappings.iter() {
+            let from = from.to_string();
+            let to = to.to_string();
+
+            if let Some(from) = scopes.get(&from) {
+                let background = from
+                    .get("background")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let foreground = from
+                    .get("foreground")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string());
+                let font_style =
+                    from.get("fontStyle")
+                        .and_then(|v| v.as_str())
+                        .and_then(|s| match s {
+                            "bold" => Some(FontStyle::Bold),
+                            "italic" => Some(FontStyle::Italic),
+                            "bold italic" => Some(FontStyle::BoldItalic),
+                            "underline" => Some(FontStyle::Underline),
+                            _ => None,
+                        });
+                settings.push(ThemeSetting {
+                    scopes: vec![to.clone()],
+                    settings: SettingAttributes {
+                        background,
+                        foreground,
+                        font_style,
+                    },
+                });
+                scopes.insert(to, from);
+            }
+        }
+
+        let name = theme["name"]
+            .as_str()
+            .unwrap_or(
+                path.as_ref()
+                    .file_name()
+                    .unwrap_or_default()
+                    .to_str()
+                    .unwrap_or("unknown"),
+            )
+            .to_string();
+        let author = theme["author"].as_str().map(|s| s.to_string());
+        let background = theme["colors"]["editor.background"]
+            .as_str()
+            .unwrap_or("#000000")
+            .to_string();
+        let foreground = theme["colors"]["editor.foreground"]
+            .as_str()
+            .unwrap_or("#ffffff")
+            .to_string();
+        let invisibles = theme["colors"]["editorInvisibles.foreground"]
+            .as_str()
+            .map(|s| s.to_string());
+        let line_highlight = theme["colors"]["editorLineNumber.activeForeground"]
+            .as_str()
+            .map(|s| s.to_string());
+        // let selection = theme["colors"]["editorLineNumber.foreground"]
+        //     .as_str()
+        //     .map(|s| s.to_string());
+        let gutter_foreground = theme["colors"]["editorGutter.foreground"]
+            .as_str()
+            .map(|s| s.to_string());
+        let gutter_background = theme["colors"]["editorGutter.background"]
+            .as_str()
+            .map(|s| s.to_string());
+        Ok(Self {
+            name,
+            author,
+            background,
+            foreground,
+            invisibles,
+            line_highlight,
+            gutter_foreground,
+            gutter_background,
+            settings,
+            ..Default::default()
+        })
+    }
+
     pub fn parse<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
         let file_name = path.as_ref().to_str().unwrap().to_string();
         let data = plist::Value::from_file(path)?;
@@ -129,9 +318,10 @@ impl Theme {
         }
 
         let background = get_mandatory_setting(&main, "background")?;
-        let caret = get_mandatory_setting(&main, "caret")?;
         let foreground = get_mandatory_setting(&main, "foreground")?;
-        let invisibles = get_mandatory_setting(&main, "invisibles")?;
+
+        let caret = get_setting(&main, "caret");
+        let invisibles = get_setting(&main, "invisibles");
 
         // gutter settings
         let gutter_foreground = get_setting(&main, "gutterForeground");
@@ -188,8 +378,8 @@ impl Theme {
             name,
             author,
             background,
-            caret,
             foreground,
+            caret,
             invisibles,
             line_highlight,
             selection,
@@ -199,5 +389,16 @@ impl Theme {
             gutter_background_highlight,
             settings,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse() {
+        let theme = Theme::parse_vscode("src/fixtures/tokyo-night-color-theme.json").unwrap();
+        println!("{:#?}", theme);
     }
 }
