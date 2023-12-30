@@ -533,6 +533,20 @@ impl Editor {
                 ..
             }) => match key {
                 KeyCode::Char(c) => match c {
+                    'G' => {
+                        self.move_to_end_of_buffer();
+                        redraw = true;
+                    }
+                    'g' => match self.waiting_key {
+                        Some('g') => {
+                            self.move_to_start_of_buffer();
+                            self.waiting_key = None;
+                            redraw = true;
+                        }
+                        _ => {
+                            self.waiting_key = Some('g');
+                        }
+                    },
                     'f' => {
                         if mods.contains(event::KeyModifiers::CONTROL) {
                             self.move_to_next_page();
