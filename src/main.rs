@@ -819,8 +819,7 @@ impl Editor {
             } else if let Ok(line) = cmd.parse::<usize>() {
                 if line == 0 {
                     self.move_to_start_of_buffer();
-                }
-                if line < self.buffer.len() {
+                } else if line < self.buffer.len() {
                     self.move_to_line(line - 1);
                 }
             }
