@@ -368,7 +368,11 @@ impl Editor {
             // checks if we are inside the buffer
             if self.buffer.len() > self.vtop + desired_cy {
                 log!("we are inside the buffer");
-                self.cy = desired_cy;
+                if desired_cy > self.vheight - 1 {
+                    self.vtop += 1;
+                } else {
+                    self.cy = desired_cy;
+                }
                 return true;
             }
 
