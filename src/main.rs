@@ -381,6 +381,31 @@ impl Editor {
         Ok(())
     }
 
+    fn move_line_to_center(&mut self) -> bool {
+        let y = self.cx;
+        let center_y = self.vheight / 2;
+
+        log!("move_line_to_center y: {} center_y: {}", y, center_y);
+
+        if y == center_y {
+            return false;
+        }
+
+        if y > center_y {
+            // it's below the center
+            let dist = y - center_y;
+            self.vtop += dist;
+            self.cy -= dist;
+        } else {
+            // it's above the center
+            let dist = center_y - y;
+            self.vtop -= dist;
+            self.cy += dist;
+        }
+
+        true
+    }
+
     fn move_down(&mut self) -> bool {
         let desired_cy = self.cy + 1;
 
@@ -612,6 +637,15 @@ impl Editor {
                         }
                         _ => {
                             self.waiting_key = Some('d');
+                        }
+                    },
+                    'z' => match self.waiting_key {
+                        Some('z') => {
+                            self.waiting_key = None;
+                            redraw = self.move_line_to_center();
+                        }
+                        _ => {
+                            self.waiting_key = Some('z');
                         }
                     },
                     'J' => {
