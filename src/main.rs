@@ -72,6 +72,7 @@ struct Config {
     faded_line_numbers: bool,
     tab_size: u8,
     tab_to_spaces: bool,
+    mouse_scroll_lines: u8,
 }
 
 impl Default for Config {
@@ -80,6 +81,7 @@ impl Default for Config {
             faded_line_numbers: true,
             tab_size: 4,
             tab_to_spaces: true,
+            mouse_scroll_lines: 3,
         }
     }
 }
@@ -523,6 +525,13 @@ impl Editor {
                 MouseEventKind::Drag(MouseButton::Left) => {
                     log!("mouse drag: {}, {}", column, row);
                 }
+                MouseEventKind::ScrollUp => {
+                    redraw = self.scroll_up();
+                }
+                MouseEventKind::ScrollDown => {
+                    self.scroll_down();
+                    redraw = true;
+                }
                 _ => {}
             },
             Event::Key(KeyEvent {
@@ -663,6 +672,43 @@ impl Editor {
         }
 
         Ok(redraw)
+    }
+
+    fn scroll_down(&mut self) {
+        let desired_vtop = self.vtop + self.config.mouse_scroll_lines as usize;
+        if desired_vtop < self.buffer.len() {
+            self.vtop = desired_vtop;
+            if let Some(cy) = self.cy.checked_sub(self.config.mouse_scroll_lines as usize) {
+                self.cy = cy;
+            } else {
+                self.cy = 0;
+            }
+        } else {
+            self.vtop = self.buffer.len() - self.vheight;
+        }
+    }
+
+    fn scroll_up(&mut self) -> bool {
+        if self.vtop == 0 {
+            return false;
+        }
+
+        if let Some(desired_vtop) = self
+            .vtop
+            .checked_sub(self.config.mouse_scroll_lines as usize)
+        {
+            self.vtop = desired_vtop;
+            let desired_cy = self.cy + self.config.mouse_scroll_lines as usize;
+            if desired_cy < self.vheight {
+                self.cy = desired_cy;
+            } else {
+                self.cy = self.vheight - 1;
+            }
+        } else {
+            self.vtop = 0;
+        }
+
+        true
     }
 
     fn move_to(&mut self, x: usize, y: usize) {
