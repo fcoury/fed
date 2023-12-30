@@ -284,12 +284,10 @@ impl Editor {
             let color = if y == self.cy { fgh } else { fg };
             stdout().queue(cursor::MoveTo(0, y as u16))?;
             if self.vtop + y >= self.buffer.len() {
-                log!("draw_gutter: empty line");
                 stdout().queue(PrintStyledContent(
                     " ".repeat(self.vleft).with(color).on(bg),
                 ))?;
             } else {
-                log!("draw_gutter: line {}", y + self.vtop + 1);
                 let line_number = format!("{:>width$}", y + self.vtop + 1);
                 stdout().queue(PrintStyledContent(line_number.with(color).on(bg)))?;
                 stdout().queue(PrintStyledContent(" ▎".to_string().with(fg).on(bg)))?;
@@ -324,20 +322,16 @@ impl Editor {
             return;
         }
 
-        // if self.by() >= self.buffer.len() - 1 {
-        //     self.cy = self.buffer.len() - 1;
-        // }
-
         let max_x = self.current_line_len();
 
-        log!(
-            "adjust_cursor: cx: {}, cy: {}, vleft: {}, vtop: {}, max_x: {}",
-            self.cx,
-            self.cy,
-            self.vleft,
-            self.vtop,
-            max_x,
-        );
+        // log!(
+        //     "adjust_cursor: cx: {}, cy: {}, vleft: {}, vtop: {}, max_x: {}",
+        //     self.cx,
+        //     self.cy,
+        //     self.vleft,
+        //     self.vtop,
+        //     max_x,
+        // );
         if self.cx >= max_x {
             match self.mode {
                 Mode::Normal => self.cx = if max_x > 0 { max_x - 1 } else { 0 },
@@ -473,7 +467,7 @@ impl Editor {
     }
 
     fn bx(&self) -> usize {
-        self.cx + self.vleft
+        self.cx
     }
 
     fn by(&self) -> usize {
@@ -481,8 +475,8 @@ impl Editor {
     }
 
     fn handle_input(&mut self, ev: Event) -> anyhow::Result<bool> {
-        log!("Event: {:?}", ev);
-        if self.handle_generic_input(&ev)? {
+        // log!("Event: {:?}", ev);
+        if self.handle_events(&ev)? {
             return Ok(true);
         }
 
@@ -497,7 +491,7 @@ impl Editor {
         self.buffer.get(self.by())
     }
 
-    fn handle_generic_input(&mut self, ev: &Event) -> anyhow::Result<bool> {
+    fn handle_events(&mut self, ev: &Event) -> anyhow::Result<bool> {
         match ev {
             Event::Resize(width, height) => {
                 log!("resize: {}x{}", width, height);
