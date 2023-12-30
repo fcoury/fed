@@ -763,6 +763,9 @@ impl Editor {
                     self.remove_char()?;
                     self.move_left()?;
                 }
+                KeyCode::Delete => {
+                    self.remove_char()?;
+                }
                 KeyCode::Enter => {
                     self.split_line_at_cursor()?;
                 }
