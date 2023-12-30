@@ -140,41 +140,55 @@ impl Theme {
             // TODO: use a invalid field error instead
             return Err(ThemeParseError::MissingField("theme".to_string()).into());
         };
-        let Some(semantic_token_colors) = theme["semanticTokenColors"].as_object() else {
-            return Err(ThemeParseError::MissingField("semanticTokenColors".to_string()).into());
-        };
-        let Some(token_colors) = theme["tokenColors"].as_array() else {
-            return Err(ThemeParseError::MissingField("tokenColors".to_string()).into());
-        };
 
         let mut scopes = HashMap::new();
 
-        for (key, value) in semantic_token_colors.iter() {
-            let Some(value) = value.as_object() else {
-                continue;
-            };
-            scopes.insert(key.clone(), value);
+        // parses colors
+        if let Some(colors) = theme.get("colors").and_then(|v| v.as_object()) {
+            for (key, value) in colors.iter() {
+                let Some(value) = value.as_object() else {
+                    continue;
+                };
+                scopes.insert(key.clone(), value);
+            }
         }
 
+        // parses semanticTokenColors
+        if let Some(semantic_token_colors) =
+            theme.get("semanticTokenColors").and_then(|v| v.as_object())
+        {
+            for (key, value) in semantic_token_colors.iter() {
+                let Some(value) = value.as_object() else {
+                    continue;
+                };
+                scopes.insert(key.clone(), value);
+            }
+        }
+
+        let Some(token_colors) = theme.get("tokenColors").and_then(|v| v.as_array()) else {
+            return Err(ThemeParseError::MissingField("tokenColors".to_string()).into());
+        };
         token_colors
             .iter()
             .filter_map(|color| {
                 color.as_object().and_then(|info| {
                     info["settings"].as_object().and_then(|settings| {
-                        info["scope"].as_array().map(|scope| {
-                            scope
-                                .iter()
-                                .filter_map(|s| {
-                                    s.as_str().map(|s| {
-                                        s.split(',')
-                                            .map(|s| s.trim().to_string())
-                                            .collect::<Vec<_>>()
+                        info.get("scope").and_then(|v| {
+                            v.as_array().map(|scope| {
+                                scope
+                                    .iter()
+                                    .filter_map(|s| {
+                                        s.as_str().map(|s| {
+                                            s.split(',')
+                                                .map(|s| s.trim().to_string())
+                                                .collect::<Vec<_>>()
+                                        })
                                     })
-                                })
-                                .flatten()
-                                .for_each(|scope| {
-                                    scopes.insert(scope, settings);
-                                })
+                                    .flatten()
+                                    .for_each(|scope| {
+                                        scopes.insert(scope, settings);
+                                    })
+                            })
                         })
                     })
                 })
@@ -229,7 +243,10 @@ impl Theme {
                     .unwrap_or("unknown"),
             )
             .to_string();
-        let author = theme["author"].as_str().map(|s| s.to_string());
+        let author = theme
+            .get("author")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
         let background = theme["colors"]["editor.background"]
             .as_str()
             .unwrap_or("#000000")
