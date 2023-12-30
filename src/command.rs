@@ -1,15 +1,15 @@
 use rustyline::{
-    completion::Completer, highlight::Highlighter, hint::Hinter, history::FileHistory,
-    validate::Validator, CompletionType, Config, Editor, Event, Helper, KeyCode, KeyEvent,
-    Modifiers,
+    history::FileHistory, Completer, CompletionType, Config, Editor, Event, Helper, Highlighter,
+    Hinter, KeyCode, KeyEvent, Modifiers, Validator,
 };
 
-pub fn new_command_editor() -> anyhow::Result<Editor<CommandHelper, FileHistory>> {
+pub fn new_command_editor() -> anyhow::Result<Editor<MaskingHighlighter, FileHistory>> {
     let mut rl = Editor::with_config(
         Config::builder()
             .completion_type(CompletionType::List)
             .auto_add_history(true)
             .edit_mode(rustyline::EditMode::Vi)
+            .newline(false)
             .build(),
     )?;
     rl.bind_sequence(
@@ -20,13 +20,5 @@ pub fn new_command_editor() -> anyhow::Result<Editor<CommandHelper, FileHistory>
     Ok(rl)
 }
 
-pub struct CommandHelper;
-impl Helper for CommandHelper {}
-impl Completer for CommandHelper {
-    type Candidate = String;
-}
-impl Hinter for CommandHelper {
-    type Hint = String;
-}
-impl Highlighter for CommandHelper {}
-impl Validator for CommandHelper {}
+#[derive(Completer, Helper, Hinter, Validator, Highlighter)]
+pub struct MaskingHighlighter;

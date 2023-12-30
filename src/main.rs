@@ -1,5 +1,4 @@
 use std::{
-    cmp,
     io::{stdout, Write},
     panic,
     time::Duration,
@@ -170,25 +169,18 @@ impl Editor {
         Ok(())
     }
 
-    pub fn draw_editor(&mut self) -> anyhow::Result<()> {
-        self.draw_buffer()?;
-        self.draw_commandline()?;
-        Ok(())
-    }
-
     pub fn draw(&mut self, _redraw: bool) -> anyhow::Result<()> {
         log!("draw");
 
         // TODO: add diff detection for all changes
-        self.pending_redraw = false;
         self.adjust_cursor();
-        self.draw_editor()?;
+
+        self.draw_buffer()?;
         self.draw_statusline()?;
         self.draw_gutter()?;
 
         if self.mode.is_command() {
             self.handle_commandline()?;
-            self.draw_editor()?;
         }
 
         self.draw_cursor()?;
@@ -242,15 +234,12 @@ impl Editor {
     }
 
     pub fn draw_commandline(&mut self) -> anyhow::Result<()> {
-        // let fg = hex_to_crossterm_color(&self.theme.foreground)?;
         let bg = hex_to_crossterm_color(&self.theme.background)?;
 
         let y = self.height as u16 - 1;
         let line = " ".repeat(self.width);
         stdout().queue(cursor::MoveTo(0, y))?;
         stdout().queue(PrintStyledContent(line.on(bg)))?;
-        // stdout().queue(cursor::MoveTo(0, y))?;
-        // stdout().queue(PrintStyledContent(":".with(fg).on(bg)))?;
         Ok(())
     }
 
@@ -652,9 +641,27 @@ impl Editor {
         Ok(())
     }
 
-    fn move_to_buffer_bottom(&mut self) -> anyhow::Result<()> {
+    fn move_to_start_of_line(&mut self) {
+        self.cx = 0;
+    }
+
+    fn move_to_start_of_buffer(&mut self) {
+        self.vtop = 0;
+        self.cy = 0;
+        self.move_to_start_of_line();
+    }
+
+    fn move_to_end_of_buffer(&mut self) {
         self.vtop = self.buffer.len() - self.vheight;
-        Ok(())
+        self.move_to_end_of_viewport();
+    }
+
+    fn move_to_end_of_viewport(&mut self) {
+        if self.buffer.len() > self.vheight {
+            self.cy = self.vheight - 1;
+        } else {
+            self.cy = self.buffer.len() - 1;
+        }
     }
 
     fn move_to_previous_page(&mut self) -> anyhow::Result<()> {
@@ -800,12 +807,13 @@ impl Editor {
     }
 
     fn handle_commandline(&mut self) -> anyhow::Result<()> {
+        terminal::disable_raw_mode()?;
         let mut rl = new_command_editor()?;
         stdout().execute(cursor::MoveTo(0, self.height as u16 - 1))?;
         match rl.readline(":") {
             Ok(line) => {
                 rl.add_history_entry(line.as_str())?;
-                log!("Command: {}", line);
+                log!("Command: {:?}", line);
                 self.handle_command(&line)?;
             }
             Err(ReadlineError::Interrupted) => {
@@ -821,18 +829,22 @@ impl Editor {
 
         self.mode = Mode::Normal;
         self.pending_redraw = true;
+        terminal::enable_raw_mode()?;
         Ok(())
     }
 
     fn handle_command(&mut self, cmd: &str) -> anyhow::Result<()> {
         if cmd == "q" {
             self.quit = true;
-            return Ok(());
+        } else if cmd == "$" {
+            self.move_to_end_of_buffer();
+        } else if cmd == "0" {
+            self.move_to_start_of_buffer();
         }
-        if cmd == "$" {
-            self.move_to_buffer_bottom()?;
-            return Ok(());
-        }
+
+        self.mode = Mode::Normal;
+        self.draw(true)?;
+
         Ok(())
     }
 }
