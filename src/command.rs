@@ -1,24 +1,42 @@
-use rustyline::{
-    history::FileHistory, Completer, CompletionType, Config, Editor, Event, Helper, Highlighter,
-    Hinter, KeyCode, KeyEvent, Modifiers, Validator,
+use std::io::{stdout, Write};
+
+use crossterm::{
+    cursor::MoveTo,
+    event::{read, Event, KeyEvent},
+    style::{PrintStyledContent, Stylize},
+    QueueableCommand,
 };
 
-pub fn new_command_editor() -> anyhow::Result<Editor<MaskingHighlighter, FileHistory>> {
-    let mut rl = Editor::with_config(
-        Config::builder()
-            .completion_type(CompletionType::List)
-            .auto_add_history(true)
-            .edit_mode(rustyline::EditMode::Vi)
-            .newline(false)
-            .build(),
-    )?;
-    rl.bind_sequence(
-        Event::KeySeq(vec![KeyEvent(KeyCode::Enter, Modifiers::NONE)]),
-        rustyline::Cmd::AcceptLine,
-    );
+use crate::Editor;
 
-    Ok(rl)
+pub fn get_command(e: &Editor) -> anyhow::Result<Option<String>> {
+    let (fg, bg) = e.theme.default_colors();
+    let width = e.width;
+
+    let mut command = String::new();
+
+    loop {
+        stdout().queue(MoveTo(0, e.command_y() as u16))?;
+        stdout().queue(PrintStyledContent(" ".repeat(width).with(fg).on(bg)))?;
+        stdout().queue(MoveTo(0, e.command_y() as u16))?;
+        stdout().queue(PrintStyledContent(format!(":{command}").with(fg).on(bg)))?;
+        stdout().flush()?;
+
+        match read()? {
+            Event::Key(KeyEvent { code, .. }) => match code {
+                crossterm::event::KeyCode::Esc => break,
+                crossterm::event::KeyCode::Enter => break,
+                crossterm::event::KeyCode::Backspace => {
+                    command.pop();
+                }
+                crossterm::event::KeyCode::Char(c) => {
+                    command.push(c);
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+
+    Ok(Some(command))
 }
-
-#[derive(Completer, Helper, Hinter, Validator, Highlighter)]
-pub struct MaskingHighlighter;

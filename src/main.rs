@@ -4,7 +4,7 @@ use std::{
     time::Duration,
 };
 
-use command::new_command_editor;
+use command::get_command;
 use crossterm::{
     cursor::{self, SetCursorStyle},
     event::{self, Event, KeyCode, KeyEvent},
@@ -14,7 +14,6 @@ use crossterm::{
 };
 use log::Logger;
 use once_cell::sync::OnceCell;
-use rustyline::error::ReadlineError;
 use theme::Theme;
 use utils::{darken, hex_to_crossterm_color};
 
@@ -130,6 +129,10 @@ impl Editor {
 
     pub fn line_number(&self) -> usize {
         self.vtop + self.cy + 1
+    }
+
+    pub fn command_y(&self) -> usize {
+        self.height - 1
     }
 
     pub fn clear(&self) -> anyhow::Result<()> {
@@ -482,7 +485,7 @@ impl Editor {
                 self.width = *width as usize;
                 self.height = *height as usize;
                 self.vwidth = *width as usize - self.vleft;
-                self.vheight = *height as usize - 1;
+                self.vheight = *height as usize - 2;
                 self.draw(true)?;
                 return Ok(true);
             }
@@ -633,6 +636,12 @@ impl Editor {
         } else {
             self.vtop = self.buffer.len() - self.vheight;
         }
+    }
+
+    fn move_to_line(&mut self, line: usize) {
+        self.vtop = line;
+        self.cy = 0;
+        self.move_to_start_of_line();
     }
 
     fn move_to_start_of_line(&mut self) {
@@ -801,44 +810,24 @@ impl Editor {
     }
 
     fn handle_commandline(&mut self) -> anyhow::Result<()> {
-        terminal::disable_raw_mode()?;
-        let mut rl = new_command_editor()?;
-        stdout().execute(cursor::MoveTo(0, self.height as u16 - 1))?;
-        match rl.readline(":") {
-            Ok(line) => {
-                rl.add_history_entry(line.as_str())?;
-                log!("Command: {:?}", line);
-                self.handle_command(&line)?;
+        if let Some(cmd) = get_command(&self)? {
+            log!("command: {}", cmd);
+            if cmd == "q" {
+                self.quit = true;
+            } else if cmd == "$" {
+                self.move_to_end_of_buffer();
+            } else if let Ok(line) = cmd.parse::<usize>() {
+                if line == 0 {
+                    self.move_to_start_of_buffer();
+                }
+                if line < self.buffer.len() {
+                    self.move_to_line(line - 1);
+                }
             }
-            Err(ReadlineError::Interrupted) => {
-                log!("CTRL-C");
-            }
-            Err(ReadlineError::Eof) => {
-                log!("CTRL-D");
-            }
-            Err(err) => {
-                log!("Error: {:?}", err);
-            }
-        }
-
-        self.mode = Mode::Normal;
-        self.pending_redraw = true;
-        terminal::enable_raw_mode()?;
-        Ok(())
-    }
-
-    fn handle_command(&mut self, cmd: &str) -> anyhow::Result<()> {
-        if cmd == "q" {
-            self.quit = true;
-        } else if cmd == "$" {
-            self.move_to_end_of_buffer();
-        } else if cmd == "0" {
-            self.move_to_start_of_buffer();
         }
 
         self.mode = Mode::Normal;
         self.draw(true)?;
-
         Ok(())
     }
 }

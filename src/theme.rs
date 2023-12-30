@@ -47,8 +47,8 @@ pub enum FontStyle {
 impl Theme {
     pub fn default_colors(&self) -> (style::Color, style::Color) {
         (
-            hex_to_crossterm_color(&self.background).unwrap(),
             hex_to_crossterm_color(&self.foreground).unwrap(),
+            hex_to_crossterm_color(&self.background).unwrap(),
         )
     }
 
