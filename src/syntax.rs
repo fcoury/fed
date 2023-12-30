@@ -355,7 +355,6 @@ pub fn highlight(buffer: &[String], theme: &Theme, viewport: &Viewport) -> anyho
     let buffer = buffer.join("\n");
     let chunks = parse(&buffer, &rust_parser)?;
     let chunks = split_chunks(chunks);
-    log!("{:?}", viewport);
     let lines = viewport.clamp_lines(&chunks)?;
 
     stdout().queue(cursor::MoveTo(viewport.left as u16, 0))?;

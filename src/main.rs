@@ -7,7 +7,10 @@ use std::{
 use command::get_command;
 use crossterm::{
     cursor::{self, position, SetCursorStyle},
-    event::{self, Event, KeyCode, KeyEvent},
+    event::{
+        self, read, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyEvent, MouseButton,
+        MouseEvent, MouseEventKind,
+    },
     style::{Color, PrintStyledContent, Stylize},
     terminal::{self, ClearType, EnterAlternateScreen, LeaveAlternateScreen},
     ExecutableCommand, QueueableCommand,
@@ -159,18 +162,16 @@ impl Editor {
         self.clear()?;
         self.draw(true)?;
 
+        stdout().execute(EnableMouseCapture)?;
         loop {
-            if event::poll(Duration::from_millis(100))? {
-                let ev = event::read()?;
-                log!("Event: {:?}", ev);
-                match self.handle_input(ev) {
-                    Ok(redraw) => {
-                        self.draw(redraw)?;
-                    }
-                    Err(err) => {
-                        log!("Error: {}", err);
-                        break;
-                    }
+            let ev = read()?;
+            match self.handle_input(ev.clone()) {
+                Ok(redraw) => {
+                    self.draw(redraw)?;
+                }
+                Err(err) => {
+                    log!("Error: {}", err);
+                    break;
                 }
             }
 
@@ -178,26 +179,30 @@ impl Editor {
                 break;
             }
         }
+        stdout().execute(DisableMouseCapture)?;
 
         terminal::disable_raw_mode()?;
         stdout().execute(LeaveAlternateScreen)?;
         Ok(())
     }
 
-    pub fn draw(&mut self, _redraw: bool) -> anyhow::Result<()> {
-        log!("draw");
+    pub fn draw(&mut self, redraw: bool) -> anyhow::Result<()> {
+        if redraw || self.pending_redraw {
+            self.pending_redraw = false;
 
-        // TODO: add diff detection for all changes
-        self.adjust_cursor();
+            // log!("draw");
+            // TODO: add diff detection for all changes
+            self.adjust_cursor();
 
-        self.draw_buffer()?;
-        self.draw_statusline()?;
-        self.draw_gutter()?;
+            self.draw_buffer()?;
+            self.draw_statusline()?;
+            self.draw_gutter()?;
 
-        if self.mode.is_command() {
-            self.handle_command()?;
-        } else {
-            clear_commandline(&self)?;
+            if self.mode.is_command() {
+                self.handle_command()?;
+            } else {
+                clear_commandline(&self)?;
+            }
         }
 
         self.draw_cursor()?;
@@ -307,12 +312,13 @@ impl Editor {
     }
 
     pub fn draw_buffer(&mut self) -> anyhow::Result<()> {
-        log!(
-            "draw_buffer left={} width={} total={}",
-            self.vleft,
-            self.vwidth,
-            self.width
-        );
+        log!("draw_buffer");
+        // log!(
+        //     "draw_buffer left={} width={} total={}",
+        //     self.vleft,
+        //     self.vwidth,
+        //     self.width
+        // );
 
         let viewport = Viewport::new(self.vtop, self.vleft, self.vwidth, self.vheight);
         highlight(&self.buffer, &self.theme, &viewport)?;
@@ -355,7 +361,7 @@ impl Editor {
             return Ok(());
         }
 
-        log!("draw_cursor cx={} cy={}", self.cx, self.cy);
+        // log!("draw_cursor cx={} cy={}", self.cx, self.cy);
         match self.mode {
             Mode::Normal => {
                 stdout().queue(SetCursorStyle::SteadyBlock)?;
@@ -376,23 +382,10 @@ impl Editor {
     fn move_down(&mut self) -> bool {
         let desired_cy = self.cy + 1;
 
-        log!(
-            "checking if inside viewport: {} < {}",
-            desired_cy,
-            self.vheight
-        );
         // checks if we are within the viewport bounds horizontally
         if desired_cy <= self.vheight {
-            log!("we are inside the viewport");
-
-            log!(
-                "checking if we are inside the buffer: {} > {}",
-                self.buffer.len(),
-                self.vtop + desired_cy,
-            );
             // checks if we are inside the buffer
             if self.buffer.len() > self.vtop + desired_cy {
-                log!("we are inside the buffer");
                 if desired_cy > self.vheight - 1 {
                     self.vtop += 1;
                 } else {
@@ -430,8 +423,6 @@ impl Editor {
     }
 
     fn move_right(&mut self) -> anyhow::Result<bool> {
-        log!("move_right");
-
         let mut redraw = false;
 
         // if we're inside the viewport
@@ -447,13 +438,6 @@ impl Editor {
                 redraw = true;
             }
         }
-        log!(
-            "move_right: cx: {}, cy: {}, vleft: {}, vtop: {}",
-            self.cx,
-            self.cy,
-            self.vleft,
-            self.vtop
-        );
         Ok(redraw)
     }
 
@@ -524,9 +508,23 @@ impl Editor {
     /// This function will return an error if there is an error on the underlying
     /// command execution.
     fn handle_normal_input(&mut self, ev: Event) -> anyhow::Result<bool> {
-        log!("handle_normal_input ev: {:?}", ev);
         let mut redraw = false;
         match ev {
+            Event::Mouse(MouseEvent {
+                kind,
+                column,
+                row,
+                modifiers: _modifiers,
+            }) => match kind {
+                MouseEventKind::Down(MouseButton::Left) => {
+                    log!("mouse up: {}, {}", column, row);
+                    self.move_to(column as usize, row as usize);
+                }
+                MouseEventKind::Drag(MouseButton::Left) => {
+                    log!("mouse drag: {}, {}", column, row);
+                }
+                _ => {}
+            },
             Event::Key(KeyEvent {
                 code: key,
                 modifiers: mods,
@@ -571,6 +569,7 @@ impl Editor {
                     }
                     ':' | ';' => {
                         self.mode = Mode::Command;
+                        redraw = true;
                     }
                     'o' => {
                         self.move_down();
@@ -664,6 +663,11 @@ impl Editor {
         }
 
         Ok(redraw)
+    }
+
+    fn move_to(&mut self, x: usize, y: usize) {
+        self.cx = x - self.vleft;
+        self.cy = y;
     }
 
     fn move_to_next_page(&mut self) {
@@ -829,7 +833,6 @@ impl Editor {
         let x = self.bx();
         let y = self.by();
 
-        log!("Insert char {} at ({}, {})", c, x, y);
         let line = self.buffer.get_mut(y).expect("line out of bounds");
         line.insert(x as usize, c);
         Ok(())
@@ -900,13 +903,11 @@ fn main() {
     let theme = std::env::args()
         .nth(2)
         .unwrap_or("src/fixtures/GitHub.tmTheme".to_string());
-    log!("theme: {}", theme);
     let theme = if theme.ends_with(".tmTheme") {
         Theme::parse(theme).unwrap()
     } else {
         Theme::parse_vscode(theme).unwrap()
     };
-    log!("theme: {:#?}", theme);
 
     let mut editor = match Editor::new(theme, file) {
         Ok(e) => e,
