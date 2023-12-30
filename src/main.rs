@@ -17,7 +17,10 @@ use once_cell::sync::OnceCell;
 use theme::Theme;
 use utils::{darken, hex_to_crossterm_color};
 
-use crate::syntax::{highlight, Viewport};
+use crate::{
+    command::clear_commandline,
+    syntax::{highlight, Viewport},
+};
 
 mod command;
 mod error;
@@ -184,6 +187,8 @@ impl Editor {
 
         if self.mode.is_command() {
             self.handle_command()?;
+        } else {
+            clear_commandline(&self)?;
         }
 
         self.draw_cursor()?;
