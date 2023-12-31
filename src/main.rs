@@ -559,8 +559,7 @@ impl Editor {
             }) => match kind {
                 MouseEventKind::Down(MouseButton::Left) => {
                     log!("mouse up: {}, {}", column, row);
-                    self.move_to(column as usize, row as usize);
-                    redraw = true;
+                    redraw = self.move_to(column as usize, row as usize);
                 }
                 MouseEventKind::Drag(MouseButton::Left) => {
                     log!("mouse drag: {}, {}", column, row);
@@ -760,12 +759,18 @@ impl Editor {
         true
     }
 
-    fn move_to(&mut self, x: usize, y: usize) {
+    fn move_to(&mut self, x: usize, y: usize) -> bool {
+        if y > self.vheight - 1 {
+            return false;
+        }
+
         self.cx = x - self.vleft;
         self.cy = y;
         if self.cx > self.current_line_len() {
             self.cx = self.current_line_len() - 1;
         }
+
+        return true;
     }
 
     fn move_to_next_page(&mut self) {
