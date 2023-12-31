@@ -382,7 +382,7 @@ impl Editor {
     }
 
     fn move_line_to_center(&mut self) -> bool {
-        let y = self.cx;
+        let y = self.cy;
         let center_y = self.vheight / 2;
 
         log!("move_line_to_center y: {} center_y: {}", y, center_y);
@@ -392,15 +392,28 @@ impl Editor {
         }
 
         if y > center_y {
-            // it's below the center
+            // it's after the center
             let dist = y - center_y;
+            log!("after the center (y > center), adding {} to top", dist);
             self.vtop += dist;
             self.cy -= dist;
+            log!("vtop = {} cy = {}", self.vtop, self.cy);
         } else {
-            // it's above the center
+            // it's before the center, so we need to scroll up by dist
             let dist = center_y - y;
-            self.vtop -= dist;
-            self.cy += dist;
+            log!(
+                "before the center (y < center), subtracting {} from top",
+                dist
+            );
+            if let Some(vtop) = self.vtop.checked_sub(dist) {
+                self.vtop = vtop;
+                self.cy += dist;
+            } else {
+                let dist = self.vtop;
+                self.vtop = 0;
+                self.cy += dist;
+            }
+            log!("vtop = {} cy = {}", self.vtop, self.cy);
         }
 
         true
