@@ -1,4 +1,5 @@
 use std::{
+    cmp,
     io::{stdout, Write},
     panic,
     time::Duration,
@@ -579,6 +580,9 @@ impl Editor {
                 ..
             }) => match key {
                 KeyCode::Char(c) => match c {
+                    'M' => {
+                        redraw = self.move_to_middle_of_viewport();
+                    }
                     'G' => {
                         self.move_to_end_of_buffer();
                         redraw = true;
@@ -802,6 +806,19 @@ impl Editor {
         self.move_to_end_of_viewport();
     }
 
+    fn move_to_middle_of_viewport(&mut self) -> bool {
+        let mid_y = self.vheight / 2;
+        if self.cy != mid_y {
+            if self.vtop + mid_y <= self.buffer.len() - 1 {
+                self.cy = mid_y;
+            } else {
+                let max_y = self.buffer.len() - self.vtop;
+                self.cy = max_y - 1;
+            }
+            return true;
+        }
+        false
+    }
     fn move_to_end_of_viewport(&mut self) {
         if self.buffer.len() > self.vheight {
             self.cy = self.vheight - 1;
