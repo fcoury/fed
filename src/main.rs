@@ -382,6 +382,44 @@ impl Editor {
         Ok(())
     }
 
+    fn move_to_next_char(&mut self, ch: char) -> bool {
+        let mut x = self.bx();
+        let mut y = self.by();
+
+        while y < self.buffer.len() {
+            // finds the next char in the buffer
+            let line = self.get_line(y).cloned();
+            log!("searching in line: {y} - {:?}", line);
+            if let Some(line) = line {
+                let mut nx = line.chars().skip(x + 1).position(|c| c == ch);
+                if nx.is_none() {
+                    nx = line
+                        .chars()
+                        .skip(x + 1)
+                        .position(|c| c == ch.to_ascii_uppercase());
+                }
+                if nx.is_none() {
+                    nx = line
+                        .chars()
+                        .skip(x + 1)
+                        .position(|c| c == ch.to_ascii_lowercase());
+                }
+                match nx {
+                    Some(x) => {
+                        self.cy = y;
+                        self.cx += x;
+                        return true;
+                    }
+                    None => {}
+                }
+            }
+            y += 1;
+            x = 0;
+        }
+
+        false
+    }
+
     fn move_line_to_center(&mut self) -> bool {
         let y = self.cy;
         let center_y = self.vheight / 2;
@@ -526,6 +564,10 @@ impl Editor {
         self.buffer.get(self.by())
     }
 
+    fn get_line(&self, y: usize) -> Option<&String> {
+        self.buffer.get(y)
+    }
+
     fn handle_events(&mut self, ev: &Event) -> anyhow::Result<bool> {
         match ev {
             Event::Resize(width, height) => {
@@ -550,6 +592,32 @@ impl Editor {
     /// This function will return an error if there is an error on the underlying
     /// command execution.
     fn handle_normal_input(&mut self, ev: Event) -> anyhow::Result<bool> {
+        let mut redraw = false;
+
+        match self.waiting_key {
+            Some('t') => match ev {
+                Event::Key(KeyEvent {
+                    code: key,
+                    modifiers: _mods,
+                    ..
+                }) => match key {
+                    KeyCode::Char(c) => {
+                        redraw = self.move_to_next_char(c);
+                        self.waiting_key = None;
+                    }
+                    _ => {}
+                },
+                _ => {}
+            },
+            _ => {
+                redraw = self.handle_normal_event(ev)?;
+            }
+        }
+
+        Ok(redraw)
+    }
+
+    fn handle_normal_event(&mut self, ev: Event) -> anyhow::Result<bool> {
         let mut redraw = false;
         match ev {
             Event::Mouse(MouseEvent {
@@ -602,6 +670,9 @@ impl Editor {
                             self.move_to_next_page();
                             redraw = true;
                         }
+                    }
+                    't' => {
+                        self.waiting_key = Some('t');
                     }
                     'b' => {
                         if mods.contains(event::KeyModifiers::CONTROL) {
