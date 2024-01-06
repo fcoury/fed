@@ -1,8 +1,6 @@
 use std::{
-    cmp,
     io::{stdout, Write},
     panic,
-    time::Duration,
 };
 
 use command::get_command;
@@ -23,10 +21,12 @@ use utils::{darken, hex_to_crossterm_color};
 
 use crate::{
     command::clear_commandline,
+    config::Config,
     syntax::{highlight, Viewport},
 };
 
 mod command;
+mod config;
 mod error;
 mod log;
 mod syntax;
@@ -69,24 +69,6 @@ impl Mode {
     }
 }
 
-struct Config {
-    faded_line_numbers: bool,
-    tab_size: u8,
-    tab_to_spaces: bool,
-    mouse_scroll_lines: u8,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            faded_line_numbers: true,
-            tab_size: 4,
-            tab_to_spaces: true,
-            mouse_scroll_lines: 3,
-        }
-    }
-}
-
 #[allow(unused)]
 #[derive(Default)]
 struct Editor {
@@ -109,13 +91,14 @@ struct Editor {
 }
 
 impl Editor {
-    pub fn new(theme: Theme, file: Option<String>) -> anyhow::Result<Self> {
+    pub fn new(file: Option<String>) -> anyhow::Result<Self> {
         let (width, height) = terminal::size()?;
 
         log!("terminal size = {}x{}", width, height);
 
         let (buffer, name) = match file {
             Some(file) => {
+                log!("opening file: {}", file);
                 let buffer = std::fs::read_to_string(&file)?;
                 (buffer.lines().map(|s| s.to_string()).collect(), file)
             }
@@ -123,9 +106,20 @@ impl Editor {
         };
 
         let vleft = 8;
+        let config = Config::read()?;
 
-        // TODO: read from disk
-        let config = Config::default();
+        println!("config = {:#?}", config);
+
+        let theme = match &config.theme {
+            Some(theme) => {
+                if theme.ends_with(".tmTheme") {
+                    Theme::load_tm(theme).unwrap()
+                } else {
+                    Theme::load_vscode(theme).unwrap()
+                }
+            }
+            None => Theme::default(),
+        };
 
         Ok(Self {
             mode: Mode::Normal,
@@ -1091,16 +1085,11 @@ fn main() {
     init_logger();
 
     let file = std::env::args().nth(1);
-    let theme = std::env::args()
-        .nth(2)
-        .unwrap_or("src/fixtures/GitHub.tmTheme".to_string());
-    let theme = if theme.ends_with(".tmTheme") {
-        Theme::parse(theme).unwrap()
-    } else {
-        Theme::parse_vscode(theme).unwrap()
-    };
+    // let theme = std::env::args()
+    //     .nth(2)
+    //     .unwrap_or("src/fixtures/GitHub.tmTheme".to_string());
 
-    let mut editor = match Editor::new(theme, file) {
+    let mut editor = match Editor::new(file) {
         Ok(e) => e,
         Err(e) => {
             eprintln!("Failed to initialize editor: {}", e);

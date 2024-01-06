@@ -1,11 +1,14 @@
-use std::{collections::HashMap, path::Path};
+use std::{collections::HashMap, io::Cursor, path::Path};
 
 use crossterm::style;
-use plist::{Dictionary, Value};
+use once_cell::sync::OnceCell;
+use plist::Dictionary;
 
 use crate::{error::ThemeParseError, utils::hex_to_crossterm_color};
 
-#[derive(Debug, Clone, Default)]
+static DEFAULT_THEME: OnceCell<Theme> = OnceCell::new();
+
+#[derive(Debug, Clone)]
 pub struct Theme {
     pub name: String,
     pub author: Option<String>,
@@ -44,6 +47,16 @@ pub enum FontStyle {
     Underline,
 }
 
+impl Default for Theme {
+    fn default() -> Self {
+        DEFAULT_THEME
+            .get_or_init(|| {
+                Theme::parse_tm(include_str!("./fixtures/Catppuccin-frappe.tmTheme")).unwrap()
+            })
+            .clone()
+    }
+}
+
 impl Theme {
     pub fn default_colors(&self) -> (style::Color, style::Color) {
         (
@@ -78,7 +91,12 @@ impl Theme {
         (background, foreground)
     }
 
-    pub fn parse_vscode<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+    pub fn load_vscode<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let contents = std::fs::read_to_string(&path)?;
+        Self::parse_vscode(&contents)
+    }
+
+    pub fn parse_vscode(contents: &str) -> anyhow::Result<Self> {
         let mappings = [
             ("attribute", "entity.other.attribute-name"),
             ("boolean", "constant.language"),
@@ -134,7 +152,6 @@ impl Theme {
             ("variable.parameter", "variable.parameter"),
         ];
 
-        let contents = std::fs::read_to_string(&path)?;
         let theme = serde_jsonrc::from_str::<serde_jsonrc::Value>(&contents)?;
         let Some(theme) = theme.as_object() else {
             // TODO: use a invalid field error instead
@@ -233,16 +250,7 @@ impl Theme {
             }
         }
 
-        let name = theme["name"]
-            .as_str()
-            .unwrap_or(
-                path.as_ref()
-                    .file_name()
-                    .unwrap_or_default()
-                    .to_str()
-                    .unwrap_or("unknown"),
-            )
-            .to_string();
+        let name = theme["name"].as_str().unwrap_or("theme").to_string();
         let author = theme
             .get("author")
             .and_then(|v| v.as_str())
@@ -284,14 +292,20 @@ impl Theme {
         })
     }
 
-    pub fn parse<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
-        let file_name = path.as_ref().to_str().unwrap().to_string();
-        let data = plist::Value::from_file(path)?;
+    pub fn load_tm<P: AsRef<Path>>(path: P) -> anyhow::Result<Self> {
+        let contents = std::fs::read_to_string(&path)?;
+        Self::parse_tm(&contents)
+    }
+
+    pub fn parse_tm(contents: &str) -> anyhow::Result<Self> {
+        let reader = Cursor::new(contents.as_bytes());
+        let data = plist::Value::from_reader(reader)?;
         let data = data.as_dictionary().unwrap();
 
         let name = data
             .get("name")
-            .unwrap_or(&Value::String(file_name))
+            // TODO use a invalid field error instead
+            .unwrap()
             .as_string()
             .unwrap()
             .to_string();
@@ -415,7 +429,7 @@ mod tests {
 
     #[test]
     fn test_parse() {
-        let theme = Theme::parse_vscode("src/fixtures/tokyo-night-color-theme.json").unwrap();
+        let theme = Theme::load_vscode("src/fixtures/tokyo-night-color-theme.json").unwrap();
         println!("{:#?}", theme);
     }
 }

@@ -9,7 +9,8 @@ use lazy_static::lazy_static;
 use strum_macros::{Display, EnumString};
 use tree_sitter_highlight::{HighlightConfiguration, HighlightEvent, Highlighter};
 
-use crate::{log, theme::Theme, utils::hex_to_crossterm_color};
+use crate::log;
+use crate::{theme::Theme, utils::hex_to_crossterm_color};
 
 const HIGHLIGHT_NAMES: [&str; 52] = [
     "attribute",
@@ -451,7 +452,7 @@ mod tests {
 
     #[test]
     fn test_highlight() {
-        let theme = Theme::parse("src/fixtures/GitHub.tmTheme").unwrap();
+        let theme = Theme::load_tm("src/fixtures/GitHub.tmTheme").unwrap();
         let viewport = Viewport {
             top: 0,
             left: 0,
