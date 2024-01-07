@@ -108,7 +108,7 @@ impl Editor {
         let vleft = 8;
         let config = Config::read()?;
 
-        println!("config = {:#?}", config);
+        log!("config = {:#?}", config);
 
         let theme = match &config.theme {
             Some(theme) => {
